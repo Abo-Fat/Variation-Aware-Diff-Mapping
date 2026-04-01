@@ -1,18 +1,17 @@
 """
-Innovation 2 — Full pipeline entry point.
+Innovation 2 - Full pipeline entry point.
 
-Phase 1   col_mc_sim / analytical_cal  — device-level calibration
-             → N_th^(1b), N_th^(2b), κ_2, κ_3
+Phase 1   col_mc_sim / analytical_cal  - device-level calibration
+             -> N_th^(1b), N_th^(2b), kappa_2, kappa_3
 
 Phase 2/3  SDR mapping methods on a demo weight block:
-             1. Conventional (u=0 non-redundant binary)
-             2. Min-neq SDR baseline
-             3. Proposed1 (all-ones bit-plane log-prob objective)
-             4. Proposed2 (INT8xINT8 MAC-accuracy objective)
-             5. Proposed3 (CRN-aligned end-to-end random-INT8 objective)
+             1. Two's complement  (二补码, TC baseline)
+             2. Conventional sign-magnitude  (差分幅值码)
+             3. Min-neq SDR baseline
+             4. Proposed1 (all-ones bit-plane log-prob objective)
 
 Phase 4   CIM MAC accuracy evaluation via FeFET charge model
-           (Conventional vs Proposed1 vs Proposed2 vs Proposed3)
+           (TC / Conventional / Proposed1 — three-way comparison)
 
 Usage:
   python run_inno2.py [--skip-mc] [--phase1-only]
@@ -151,18 +150,16 @@ def phase23(W=None):
 
     Returns
     -------
-    W          : ndarray [M, N]
-    res_conv   : result dict for conventional mapping
-    res_mneq   : result dict for min-neq SDR
-    res_p1     : result dict for Proposed1 optimizer
-    res_p2     : result dict for Proposed2 optimizer
-    res_p3     : result dict for Proposed3 optimizer
+    W        : ndarray [M, N]
+    res_tc   : result dict for two's complement mapping
+    res_conv : result dict for conventional sign-magnitude mapping
+    res_mneq : result dict for min-neq SDR
+    res_p1   : result dict for Proposed1 optimizer
     """
     from src.column_stats          import load_calibration
-    from src.baseline_mapping      import conventional_map, minneq_map, print_summary
+    from src.baseline_mapping      import twos_complement_map, conventional_map, \
+                                          minneq_map, print_summary
     from src.accuracy_optimizer    import optimize_mapping_proposed1
-    from src.mac_accuracy_optimizer import optimize_mapping_proposed2
-    from src.mac_accuracy_optimizer_p3 import optimize_mapping_proposed3
     from src.decompose             import build_sdr_lut
 
     cal = load_calibration(RESULTS_DIR)
@@ -180,11 +177,19 @@ def phase23(W=None):
     print("\nBuilding SDR LUT...")
     lut = build_sdr_lut()
 
+    # --- Two's complement ---
+    print("\n" + "=" * 60)
+    print("[Phase 2] Two's complement mapping (二补码)")
+    res_tc = twos_complement_map(W, cal=cal)
+    print_summary(res_tc, label="TC (二补码)")
+    _save_result(res_tc, 'result_tc')
+    print("[Phase 2] Done.")
+
     # --- Conventional ---
     print("\n" + "=" * 60)
-    print("[Phase 2] Conventional mapping (non-redundant binary)")
+    print("[Phase 2] Conventional mapping (差分幅值码, sign-magnitude)")
     res_conv = conventional_map(W, cal=cal)
-    print_summary(res_conv, label='Conventional')
+    print_summary(res_conv, label='Conv (差分幅值码)')
     _save_result(res_conv, 'result_conventional')
     print("[Phase 2] Done.")
 
@@ -204,124 +209,77 @@ def phase23(W=None):
     _save_result(res_p1, 'result_proposed1')
     print("[Phase 3] Done.")
 
-    # --- Proposed2 optimizer ---
-    print("\n" + "=" * 60)
-    print("[Phase 3b] Proposed2 SDR optimizer (INT8xINT8 MAC objective)")
-    res_p2 = optimize_mapping_proposed2(W, cal=cal, lut=lut, max_iter=10, verbose=True)
-    print_summary(res_p2, label='Proposed2')
-    _save_result(res_p2, 'result_proposed2')
-    print(f"  log_P_total = {res_p2['log_P_total']:.4f}")
-    print("[Phase 3b] Done.")
-
-    # --- Proposed3 optimizer ---
-    print("\n" + "=" * 60)
-    print("[Phase 3c] Proposed3 SDR optimizer (CRN-aligned E2E objective)")
-    n_jobs = max(1, (os.cpu_count() or 1) - 1)
-    print(f"  Using multi-core for Proposed3: n_jobs={n_jobs}")
-    res_p3 = optimize_mapping_proposed3(
-        W, cal=cal, lut=lut, max_iter=3, verbose=True, n_jobs=n_jobs)
-    print_summary(res_p3, label='Proposed3')
-    _save_result(res_p3, 'result_proposed3')
-    print(f"  log_P_total = {res_p3['log_P_total']:.4f}")
-    print("[Phase 3c] Done.")
-
     # Summary table
     print("\n" + "=" * 60)
-    print("Summary comparison  (obj = weighted J + η·nth_normalised S)")
-    print(f"  {'Metric':<20} {'Conventional':>14} {'Min-neq':>14} "
-        f"{'Proposed1':>14} {'Proposed2':>14} {'Proposed3':>14}")
-    print(f"  {'-'*78}")
+    print("Summary comparison  (obj = weighted J + nth_normalised S)")
+    print(f"  {'Metric':<20} {'TC':>12} {'Conventional':>14} {'Min-neq':>12} {'Proposed1':>12}")
+    print(f"  {'-'*82}")
     for key in ('J_total', 'S_raw_total', 'obj'):
+        tc = res_tc[key]
         cv = res_conv[key]
         mn = res_mneq[key]
         p1 = res_p1[key]
-        p2 = res_p2[key]
-        p3 = res_p3[key]
-        r1 = 100.0 * (cv - mn) / max(abs(cv), 1e-12)
-        r2 = 100.0 * (cv - p1) / max(abs(cv), 1e-12)
-        r3 = 100.0 * (cv - p2) / max(abs(cv), 1e-12)
-        r4 = 100.0 * (cv - p3) / max(abs(cv), 1e-12)
-        print(f"  {key:<20} {cv:>14.4f} {mn:>13.4f} ({r1:+.1f}%) "
-              f"{p1:>13.4f} ({r2:+.1f}%) {p2:>13.4f} ({r3:+.1f}%) "
-              f"{p3:>13.4f} ({r4:+.1f}%)")
-    print(f"  {'log_P_total':<20} {'N/A':>14} {'N/A':>14} "
-          f"{res_p1['log_P_total']:>14.2f} {res_p2['log_P_total']:>14.2f} "
-          f"{res_p3['log_P_total']:>14.2f}")
+        r_cv = 100.0 * (tc - cv) / max(abs(tc), 1e-12)
+        r_mn = 100.0 * (tc - mn) / max(abs(tc), 1e-12)
+        r_p1 = 100.0 * (tc - p1) / max(abs(tc), 1e-12)
+        print(f"  {key:<20} {tc:>12.4f} {cv:>13.4f} ({r_cv:+.1f}%) "
+              f"{mn:>11.4f} ({r_mn:+.1f}%) {p1:>11.4f} ({r_p1:+.1f}%)")
+    print(f"  {'log_P_total':<20} {'N/A':>12} {'N/A':>14} {'N/A':>12} {res_p1['log_P_total']:>12.2f}")
 
-    return W, res_conv, res_mneq, res_p1, res_p2, res_p3
+    return W, res_tc, res_conv, res_mneq, res_p1
 
 
 # ---------------------------------------------------------------------------
 # Phase 4: CIM accuracy
 # ---------------------------------------------------------------------------
 
-def phase4(W, res_conv, res_p1, res_p2, res_p3):
+def phase4(W, res_tc, res_conv, res_p1):
     """
     CIM MAC accuracy evaluation.
-    Compares conventional, Proposed1, Proposed2 and Proposed3
-    against the exact integer MAC reference.
+    Three-way comparison: TC (二补码) / Conventional (差分幅值码) / Proposed1.
     """
     from src.cim_accuracy import evaluate_accuracy, print_accuracy_comparison
 
     print("\n" + "=" * 60)
-    print("[Phase 4] CIM MAC accuracy evaluation")
+    print("[Phase 4] CIM MAC accuracy evaluation  (TC / Conv / Proposed)")
     print(f"  N_vec=1000, vth_sigma_scale={cfg.VTH_SIGMA_SCALE:.1f}")
 
-    print("\n  [4] Conventional vs Proposed1 vs Proposed2 vs Proposed3")
     acc = evaluate_accuracy(
         W,
-        planes_base = res_conv['planes'],
-        planes_p1   = res_p1['planes'],
-        planes_p2   = res_p2['planes'],
-        planes_p3   = res_p3['planes'],
-        sigma       = cfg.VTH_SIGMA_SCALE,
-        N_vec       = 1000,
-        seed        = 2026,
-        device      = 'cpu',
-        verbose     = True,
+        planes_tc       = res_tc['planes'],
+        planes_conv     = res_conv['planes'],
+        planes_proposed = res_p1['planes'],
+        sigma           = cfg.VTH_SIGMA_SCALE,
+        N_vec           = 1000,
+        seed            = 2026,
+        device          = 'cpu',
+        verbose         = True,
     )
+
     print_accuracy_comparison(acc)
 
-    base_ex = acc['baseline_exact_rate']
-    p1_ex   = acc['proposed1_exact_rate']
-    p2_ex   = acc['proposed2_exact_rate']
-    p3_ex   = acc['proposed3_exact_rate']
-    print("\n" + "=" * 60)
-    print("Four-way exact match rate summary:")
-    print(f"  Conventional   : {base_ex:.4f}")
-    print(f"  Proposed1      : {p1_ex:.4f}  (delta vs conv: {p1_ex - base_ex:+.4f})")
-    print(f"  Proposed2      : {p2_ex:.4f}  (delta vs conv: {p2_ex - base_ex:+.4f})")
-    print(f"  Proposed3      : {p3_ex:.4f}  (delta vs conv: {p3_ex - base_ex:+.4f})")
-
     np.savez(os.path.join(RESULTS_DIR, 'cim_accuracy.npz'),
-             baseline_exact_rate     = acc['baseline_exact_rate'],
-             proposed1_exact_rate    = acc['proposed1_exact_rate'],
-             proposed2_exact_rate    = acc['proposed2_exact_rate'],
-             proposed3_exact_rate    = acc['proposed3_exact_rate'],
-             baseline_cos_mean       = acc['baseline_cos_mean'],
-             baseline_cos_std        = acc['baseline_cos_std'],
-             baseline_rel_l2_mean    = acc['baseline_rel_l2_mean'],
-             baseline_rel_l2_std     = acc['baseline_rel_l2_std'],
-             proposed1_cos_mean      = acc['proposed1_cos_mean'],
-             proposed1_cos_std       = acc['proposed1_cos_std'],
-             proposed1_rel_l2_mean   = acc['proposed1_rel_l2_mean'],
-             proposed1_rel_l2_std    = acc['proposed1_rel_l2_std'],
-             proposed2_cos_mean      = acc['proposed2_cos_mean'],
-             proposed2_cos_std       = acc['proposed2_cos_std'],
-             proposed2_rel_l2_mean   = acc['proposed2_rel_l2_mean'],
-             proposed2_rel_l2_std    = acc['proposed2_rel_l2_std'],
-             proposed3_cos_mean      = acc['proposed3_cos_mean'],
-             proposed3_cos_std       = acc['proposed3_cos_std'],
-             proposed3_rel_l2_mean   = acc['proposed3_rel_l2_mean'],
-             proposed3_rel_l2_std    = acc['proposed3_rel_l2_std'],
-             baseline_pe_rate_1b     = acc['baseline_pe_rate_1b'],
-             proposed1_pe_rate_1b    = acc['proposed1_pe_rate_1b'],
-             proposed2_pe_rate_1b    = acc['proposed2_pe_rate_1b'],
-             proposed3_pe_rate_1b    = acc['proposed3_pe_rate_1b'],
-             baseline_pe_rate_2b     = acc['baseline_pe_rate_2b'],
-             proposed1_pe_rate_2b    = acc['proposed1_pe_rate_2b'],
-             proposed2_pe_rate_2b    = acc['proposed2_pe_rate_2b'],
-             proposed3_pe_rate_2b    = acc['proposed3_pe_rate_2b'],
+             tc_exact_rate          = acc['tc_exact_rate'],
+             conv_exact_rate        = acc['conv_exact_rate'],
+             proposed_exact_rate    = acc['proposed_exact_rate'],
+             tc_cos_mean            = acc['tc_cos_mean'],
+             tc_cos_std             = acc['tc_cos_std'],
+             tc_rel_l2_mean         = acc['tc_rel_l2_mean'],
+             tc_rel_l2_std          = acc['tc_rel_l2_std'],
+             conv_cos_mean          = acc['conv_cos_mean'],
+             conv_cos_std           = acc['conv_cos_std'],
+             conv_rel_l2_mean       = acc['conv_rel_l2_mean'],
+             conv_rel_l2_std        = acc['conv_rel_l2_std'],
+             proposed_cos_mean      = acc['proposed_cos_mean'],
+             proposed_cos_std       = acc['proposed_cos_std'],
+             proposed_rel_l2_mean   = acc['proposed_rel_l2_mean'],
+             proposed_rel_l2_std    = acc['proposed_rel_l2_std'],
+             tc_pe_rate_1b          = acc['tc_pe_rate_1b'],
+             conv_pe_rate_1b        = acc['conv_pe_rate_1b'],
+             proposed_pe_rate_1b    = acc['proposed_pe_rate_1b'],
+             tc_pe_rate_2b          = acc['tc_pe_rate_2b'],
+             conv_pe_rate_2b        = acc['conv_pe_rate_2b'],
+             proposed_pe_rate_2b    = acc['proposed_pe_rate_2b'],
              # Metadata
              lambda_B = acc['lambda_B'],
              lambda_Q = acc['lambda_Q'],
@@ -346,8 +304,8 @@ def main():
 
     phase1(skip_mc=args.skip_mc)
     if not args.phase1_only:
-        W, res_conv, res_mneq, res_p1, res_p2, res_p3 = phase23()
-        phase4(W, res_conv=res_conv, res_p1=res_p1, res_p2=res_p2, res_p3=res_p3)
+        W, res_tc, res_conv, _, res_p1 = phase23()
+        phase4(W, res_tc=res_tc, res_conv=res_conv, res_p1=res_p1)
 
     print("\n[run_inno2] All phases complete. Results in:", RESULTS_DIR)
 

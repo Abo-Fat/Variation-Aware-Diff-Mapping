@@ -31,6 +31,7 @@ import config_inno2 as cfg
 
 from decompose    import (build_sdr_lut,
                           conventional_decompose,
+                          twos_complement_decompose,
                           min_neq_decompose,
                           sdr_to_planes,
                           verify_reconstruction)
@@ -104,6 +105,32 @@ def conventional_map(W, cal=None, KB=None, KQ=None):
     W    = np.asarray(W, dtype=np.int64)
     D_B, D_Q = conventional_decompose(W, KB, KQ)
     return _build_result(W, D_B, D_Q, cal, 'conventional')
+
+
+# ---------------------------------------------------------------------------
+# Two's complement mapping  (二补码)
+# ---------------------------------------------------------------------------
+
+def twos_complement_map(W, cal=None, KB=None, KQ=None):
+    """
+    Apply two's complement decomposition to W.
+
+    MSB 1-bit plane acts as sign bit (d^B[KB-1] ∈ {-1, 0}); all other
+    planes carry non-negative digits.  For weights below -λ_B[KB-1]
+    (outside TC range) the decomposition falls back to sign-magnitude.
+
+    Parameters
+    ----------
+    W   : ndarray [M, N]  integer weights in [-W_MAX, W_MAX]
+    cal : calibration dict (N_th_1b, N_th_2b, kappa_2, kappa_3)
+    """
+    if KB  is None: KB  = cfg.KB
+    if KQ  is None: KQ  = cfg.KQ
+    if cal is None: cal = load_calibration()
+
+    W = np.asarray(W, dtype=np.int64)
+    D_B, D_Q = twos_complement_decompose(W, KB, KQ)
+    return _build_result(W, D_B, D_Q, cal, 'twos_complement')
 
 
 # ---------------------------------------------------------------------------

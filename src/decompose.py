@@ -117,6 +117,110 @@ def conventional_decompose(W, KB=None, KQ=None):
 
 
 # ---------------------------------------------------------------------------
+# Two's complement mapping  (二补码)
+# ---------------------------------------------------------------------------
+
+def twos_complement_decompose(W, KB=None, KQ=None):
+    """
+    Two's complement decomposition for mixed-precision CIM.
+
+    The MSB 1-bit plane (index KB-1, weight λ_B[KB-1]) acts as the sign bit:
+      d^B[KB-1] ∈ {-1, 0}  →  B_minus active when weight is negative.
+    All other planes carry non-negative digits:
+      d^B[m<KB-1] ∈ {0, 1},   d^Q[t] ∈ {0, 1, 2, 3}.
+
+    Representable TC range: [-λ_B[KB-1], W_MAX]  (= [-64, 127] for KB=3,KQ=2).
+    For weights below -λ_B[KB-1] (outside TC range), falls back to
+    sign-magnitude (conventional_decompose) so reconstruction is always exact.
+
+    Key difference vs sign-magnitude (差分幅值码):
+      Sign-magnitude: for w<0, ALL digits negative → only B_minus/Q_minus active.
+      Two's complement: lower digits remain positive → B_plus/Q_plus also active,
+      increasing column activity and thus CIM error exposure.
+
+    Returns
+    -------
+    D_B : ndarray [KB, M, N]  int8, values in {-1, 0, +1}
+    D_Q : ndarray [KQ, M, N]  int8, values in {-3,...,+3}
+    """
+    if KB is None: KB = cfg.KB
+    if KQ is None: KQ = cfg.KQ
+
+    lambda_B = [2 ** (2 * KQ + m) for m in range(KB)]
+    sign_th  = lambda_B[KB - 1]   # threshold = λ_B[KB-1], e.g. 64
+
+    W = np.asarray(W, dtype=np.int64)
+    M, N = W.shape
+
+    D_B = np.zeros((KB, M, N), dtype=np.int8)
+    D_Q = np.zeros((KQ, M, N), dtype=np.int8)
+
+    # ── Region masks ──────────────────────────────────────────────────────────
+    pos_mask = W >= 0                          # [0, W_MAX]  : standard
+    tc_mask  = (W < 0) & (W >= -sign_th)      # [-sign_th, -1]: exact TC
+    sm_mask  = W < -sign_th                    # below TC range: SM fallback
+
+    # ── Helper: decompose a non-negative integer array into planes ────────────
+    def _decompose_nonneg(V, start_plane_B=0):
+        """Fill D_B[start_plane_B..KB-1] and D_Q from non-negative V."""
+        rem = V.copy()
+        for m in range(KB - 1, start_plane_B - 1, -1):
+            D_B[m] += ((rem // lambda_B[m]) * np.where(V > 0, 1, 0)).astype(np.int8)
+            rem = rem % lambda_B[m]
+        for t in range(KQ - 1, -1, -1):
+            D_Q[t] += ((rem // (4 ** t)) * np.where(V > 0, 1, 0)).astype(np.int8)
+            rem = rem % (4 ** t)
+
+    # ── Positive weights ──────────────────────────────────────────────────────
+    if np.any(pos_mask):
+        W_p = np.where(pos_mask, W, np.int64(0))
+        rem = W_p.copy()
+        for m in range(KB - 1, -1, -1):
+            D_B[m] = np.where(pos_mask,
+                              (rem // lambda_B[m]).astype(np.int8), D_B[m])
+            rem = rem % lambda_B[m]
+        for t in range(KQ - 1, -1, -1):
+            D_Q[t] = np.where(pos_mask,
+                              (rem // (4 ** t)).astype(np.int8), D_Q[t])
+            rem = rem % (4 ** t)
+
+    # ── TC region: w in [-sign_th, -1] ───────────────────────────────────────
+    if np.any(tc_mask):
+        # Lower planes represent (w + sign_th) ∈ [0, sign_th-1] non-negatively
+        W_tc = np.where(tc_mask, W + sign_th, np.int64(0))   # in [0, sign_th-1]
+        rem  = W_tc.copy()
+        for m in range(KB - 2, -1, -1):   # planes 0 .. KB-2 (skip MSB)
+            D_B[m] = np.where(tc_mask,
+                              (rem // lambda_B[m]).astype(np.int8), D_B[m])
+            rem = rem % lambda_B[m]
+        for t in range(KQ - 1, -1, -1):
+            D_Q[t] = np.where(tc_mask,
+                              (rem // (4 ** t)).astype(np.int8), D_Q[t])
+            rem = rem % (4 ** t)
+        # MSB is the sign bit: d^B[KB-1] = -1
+        D_B[KB - 1] = np.where(tc_mask, np.int8(-1), D_B[KB - 1])
+
+    # ── SM fallback: w < -sign_th ─────────────────────────────────────────────
+    if np.any(sm_mask):
+        W_sm = np.where(sm_mask, np.abs(W), np.int64(0))
+        rem  = W_sm.copy()
+        D_B_sm = np.zeros((KB, M, N), dtype=np.int8)
+        D_Q_sm = np.zeros((KQ, M, N), dtype=np.int8)
+        for m in range(KB - 1, -1, -1):
+            D_B_sm[m] = (rem // lambda_B[m]).astype(np.int8)
+            rem = rem % lambda_B[m]
+        for t in range(KQ - 1, -1, -1):
+            D_Q_sm[t] = (rem // (4 ** t)).astype(np.int8)
+            rem = rem % (4 ** t)
+        for m in range(KB):
+            D_B[m] = np.where(sm_mask, -D_B_sm[m], D_B[m])
+        for t in range(KQ):
+            D_Q[t] = np.where(sm_mask, -D_Q_sm[t], D_Q[t])
+
+    return D_B, D_Q
+
+
+# ---------------------------------------------------------------------------
 # Min-neq SDR baseline
 # ---------------------------------------------------------------------------
 
@@ -249,6 +353,11 @@ def _self_test():
     err2 = verify_reconstruction(W, D_B2, D_Q2, KB, KQ)
     assert err2 == 0, f"Min-neq recon error = {err2}"
     print(f"  min_neq_decompose:      max_err={err2}  OK")
+
+    D_B_tc, D_Q_tc = twos_complement_decompose(W, KB, KQ)
+    err_tc = verify_reconstruction(W, D_B_tc, D_Q_tc, KB, KQ)
+    assert err_tc == 0, f"TC recon error = {err_tc}"
+    print(f"  twos_complement_decompose: max_err={err_tc}  OK")
 
     planes = sdr_to_planes(D_B2, D_Q2)
     overlap_B = np.any((planes['B_plus'] > 0) & (planes['B_minus'] > 0))

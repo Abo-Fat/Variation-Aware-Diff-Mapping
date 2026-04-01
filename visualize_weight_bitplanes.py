@@ -1,5 +1,5 @@
-"""
-Visualize a 64x64 weight matrix and its mapped bit-planes.
+﻿"""
+Visualize a weight matrix and its mapped bit-planes.
 
 Usage examples
 --------------
@@ -7,14 +7,6 @@ python visualize_weight_bitplanes.py
 python visualize_weight_bitplanes.py --method minneq
 python visualize_weight_bitplanes.py --method proposed --seed 2026
 python visualize_weight_bitplanes.py --weight-npy path\\to\\W.npy
-
-Outputs
--------
-Saved under VADM/Results/bitplane_viz_<method>/:
-  - weight_matrix.png
-  - signed_digits.png
-  - mapped_planes.png
-  - all_in_one.png
 """
 
 import argparse
@@ -33,12 +25,10 @@ import matplotlib.pyplot as plt
 import src.config_inno2 as cfg
 from src.decompose import build_sdr_lut
 from src.baseline_mapping import conventional_map, minneq_map
-from src.mapping_optimizer import optimize_mapping
+from src.accuracy_optimizer import optimize_mapping_proposed1
 from src.column_stats import load_calibration
 
-
 RESULTS_DIR = os.path.join(os.path.dirname(__file__), 'Results')
-
 
 plt.rcParams.update({
     'font.family': 'sans-serif',
@@ -50,39 +40,17 @@ plt.rcParams.update({
 
 
 def _parse_args():
-    parser = argparse.ArgumentParser(
-        description='Visualize a weight matrix and every mapped bit-plane.'
-    )
+    parser = argparse.ArgumentParser(description='Visualize a weight matrix and every mapped bit-plane.')
     parser.add_argument(
         '--method',
         choices=['conventional', 'minneq', 'proposed'],
         default='conventional',
-        help='Mapping method used to generate bit-planes.',
+        help='Mapping method used to generate bit-planes. proposed=Proposed1 optimizer.',
     )
-    parser.add_argument(
-        '--seed',
-        type=int,
-        default=2026,
-        help='Random seed used when weight matrix is generated internally.',
-    )
-    parser.add_argument(
-        '--size',
-        type=int,
-        default=cfg.COLUMN_SIZE,
-        help='Weight matrix size. Default follows config_inno2.COLUMN_SIZE.',
-    )
-    parser.add_argument(
-        '--weight-npy',
-        type=str,
-        default=None,
-        help='Optional path to a saved weight matrix .npy file.',
-    )
-    parser.add_argument(
-        '--max-iter',
-        type=int,
-        default=10,
-        help='Max iterations for proposed optimizer.',
-    )
+    parser.add_argument('--seed', type=int, default=2026, help='Random seed for generated weight matrix.')
+    parser.add_argument('--size', type=int, default=cfg.COLUMN_SIZE, help='Weight matrix size (if generated).')
+    parser.add_argument('--weight-npy', type=str, default=None, help='Optional path to a saved weight matrix .npy file.')
+    parser.add_argument('--max-iter', type=int, default=10, help='Max iterations for proposed optimizer.')
     return parser.parse_args()
 
 
@@ -92,10 +60,10 @@ def _ensure_dir(path):
 
 def _load_or_make_weight(args):
     if args.weight_npy is not None:
-        W = np.load(args.weight_npy)
-        if W.ndim != 2:
-            raise ValueError(f'Expected a 2D weight matrix, got shape {W.shape}.')
-        return np.asarray(W, dtype=np.int64)
+        w = np.load(args.weight_npy)
+        if w.ndim != 2:
+            raise ValueError(f'Expected a 2D weight matrix, got shape {w.shape}.')
+        return np.asarray(w, dtype=np.int64)
 
     rng = np.random.default_rng(args.seed)
     return rng.integers(-cfg.W_MAX, cfg.W_MAX + 1, size=(args.size, args.size))
@@ -113,15 +81,15 @@ def _load_calibration_or_fallback():
         }
 
 
-def _run_mapping(W, method, max_iter):
+def _run_mapping(w, method, max_iter):
     cal = _load_calibration_or_fallback()
     lut = build_sdr_lut()
 
     if method == 'conventional':
-        return conventional_map(W, cal=cal)
+        return conventional_map(w, cal=cal)
     if method == 'minneq':
-        return minneq_map(W, cal=cal, lut=lut)
-    return optimize_mapping(W, cal=cal, lut=lut, max_iter=max_iter, verbose=False)
+        return minneq_map(w, cal=cal, lut=lut)
+    return optimize_mapping_proposed1(w, cal=cal, lut=lut, max_iter=max_iter, verbose=False)
 
 
 def _hide_ticks(ax):
@@ -129,10 +97,10 @@ def _hide_ticks(ax):
     ax.set_yticks([])
 
 
-def _plot_weight(ax, W):
-    vmax = max(abs(int(W.min())), abs(int(W.max())))
-    im = ax.imshow(W, cmap='RdBu_r', vmin=-vmax, vmax=vmax, interpolation='nearest')
-    ax.set_title(f'Weight Matrix ({W.shape[0]}x{W.shape[1]})')
+def _plot_weight(ax, w):
+    vmax = max(abs(int(w.min())), abs(int(w.max())))
+    im = ax.imshow(w, cmap='RdBu_r', vmin=-vmax, vmax=vmax, interpolation='nearest')
+    ax.set_title(f'Weight Matrix ({w.shape[0]}x{w.shape[1]})')
     _hide_ticks(ax)
     return im
 
@@ -167,36 +135,32 @@ def _save_figure(fig, path):
     plt.close(fig)
 
 
-def _make_weight_figure(W, out_dir):
+def _make_weight_figure(w, out_dir):
     fig, ax = plt.subplots(1, 1, figsize=(5.2, 4.8))
-    im = _plot_weight(ax, W)
+    im = _plot_weight(ax, w)
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label('Weight value')
     _save_figure(fig, os.path.join(out_dir, 'weight_matrix.png'))
 
 
-def _make_signed_digit_figure(W, result, out_dir):
-    D_B = result['D_B']
-    D_Q = result['D_Q']
-    n_panels = 1 + D_B.shape[0] + D_Q.shape[0]
+def _make_signed_digit_figure(w, result, out_dir):
+    d_b = result['D_B']
+    d_q = result['D_Q']
+    n_panels = 1 + d_b.shape[0] + d_q.shape[0]
     fig, axes = plt.subplots(1, n_panels, figsize=(3.4 * n_panels, 4.0))
     axes = np.atleast_1d(axes)
 
-    im0 = _plot_weight(axes[0], W)
+    im0 = _plot_weight(axes[0], w)
     fig.colorbar(im0, ax=axes[0], fraction=0.046, pad=0.04)
 
     idx = 1
-    for m in range(D_B.shape[0]):
-        im = _plot_signed_digit(
-            axes[idx], D_B[m], f'D_B[{m}]  (lambda={cfg.LAMBDA_B[m]})'
-        )
+    for m in range(d_b.shape[0]):
+        im = _plot_signed_digit(axes[idx], d_b[m], f'D_B[{m}] (lambda={cfg.LAMBDA_B[m]})')
         fig.colorbar(im, ax=axes[idx], fraction=0.046, pad=0.04)
         idx += 1
 
-    for t in range(D_Q.shape[0]):
-        im = _plot_signed_digit(
-            axes[idx], D_Q[t], f'D_Q[{t}]  (lambda={cfg.LAMBDA_Q[t]})'
-        )
+    for t in range(d_q.shape[0]):
+        im = _plot_signed_digit(axes[idx], d_q[t], f'D_Q[{t}] (lambda={cfg.LAMBDA_Q[t]})')
         fig.colorbar(im, ax=axes[idx], fraction=0.046, pad=0.04)
         idx += 1
 
@@ -206,35 +170,27 @@ def _make_signed_digit_figure(W, result, out_dir):
 
 def _make_mapped_plane_figure(result, out_dir):
     planes = result['planes']
-    KB = planes['B_plus'].shape[0]
-    KQ = planes['Q_plus'].shape[0]
-    n_cols = max(KB, KQ)
+    kb = planes['B_plus'].shape[0]
+    kq = planes['Q_plus'].shape[0]
+    n_cols = max(kb, kq)
 
     fig, axes = plt.subplots(4, n_cols, figsize=(3.1 * n_cols, 10.6))
     axes = np.atleast_2d(axes)
 
     for c in range(n_cols):
-        if c < KB:
-            im = _plot_positive_plane(
-                axes[0, c], planes['B_plus'][c], f'B_plus[{c}]'
-            )
+        if c < kb:
+            im = _plot_positive_plane(axes[0, c], planes['B_plus'][c], f'B_plus[{c}]')
             fig.colorbar(im, ax=axes[0, c], fraction=0.046, pad=0.04)
-            im = _plot_negative_plane(
-                axes[1, c], planes['B_minus'][c], f'B_minus[{c}]'
-            )
+            im = _plot_negative_plane(axes[1, c], planes['B_minus'][c], f'B_minus[{c}]')
             fig.colorbar(im, ax=axes[1, c], fraction=0.046, pad=0.04)
         else:
             axes[0, c].axis('off')
             axes[1, c].axis('off')
 
-        if c < KQ:
-            im = _plot_positive_plane(
-                axes[2, c], planes['Q_plus'][c], f'Q_plus[{c}]'
-            )
+        if c < kq:
+            im = _plot_positive_plane(axes[2, c], planes['Q_plus'][c], f'Q_plus[{c}]')
             fig.colorbar(im, ax=axes[2, c], fraction=0.046, pad=0.04)
-            im = _plot_negative_plane(
-                axes[3, c], planes['Q_minus'][c], f'Q_minus[{c}]'
-            )
+            im = _plot_negative_plane(axes[3, c], planes['Q_minus'][c], f'Q_minus[{c}]')
             fig.colorbar(im, ax=axes[3, c], fraction=0.046, pad=0.04)
         else:
             axes[2, c].axis('off')
@@ -244,9 +200,9 @@ def _make_mapped_plane_figure(result, out_dir):
     _save_figure(fig, os.path.join(out_dir, 'mapped_planes.png'))
 
 
-def _make_all_in_one_figure(W, result, out_dir):
+def _make_all_in_one_figure(w, result, out_dir):
     planes = result['planes']
-    entries = [('Weight', W, 'weight')]
+    entries = [('Weight', w, 'weight')]
     for m in range(result['D_B'].shape[0]):
         entries.append((f'D_B[{m}]', result['D_B'][m], 'signed'))
     for t in range(result['D_Q'].shape[0]):
@@ -283,19 +239,19 @@ def _make_all_in_one_figure(W, result, out_dir):
 
 def main():
     args = _parse_args()
-    W = _load_or_make_weight(args)
-    result = _run_mapping(W, args.method, args.max_iter)
+    w = _load_or_make_weight(args)
+    result = _run_mapping(w, args.method, args.max_iter)
 
     out_dir = os.path.join(RESULTS_DIR, f'bitplane_viz_{args.method}')
     _ensure_dir(out_dir)
 
-    _make_weight_figure(W, out_dir)
-    _make_signed_digit_figure(W, result, out_dir)
+    _make_weight_figure(w, out_dir)
+    _make_signed_digit_figure(w, result, out_dir)
     _make_mapped_plane_figure(result, out_dir)
-    _make_all_in_one_figure(W, result, out_dir)
+    _make_all_in_one_figure(w, result, out_dir)
 
     print(f'Method: {args.method}')
-    print(f'Weight shape: {W.shape}')
+    print(f'Weight shape: {w.shape}')
     print(f'Output directory: {out_dir}')
     print('Saved:')
     print('  weight_matrix.png')

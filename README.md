@@ -50,17 +50,17 @@ VADM/
 │   ├── kappa_calibration.py    # MC 路径：kappa 拟合（Phase 1.3）
 │   │
 │   │   ── Phase 2/3：分解与 Mapping ──
-│   ├── decompose.py            # SDR 分解：LUT 构建、conventional、min-neq
+│   ├── decompose.py            # SDR 分解：LUT、conventional、twos_complement、min-neq
 │   ├── column_stats.py         # 列统计：n^{1b}、n^{2b,eq}、J_c、S_c、目标函数
-│   ├── baseline_mapping.py     # 基线 mapping（conventional_map、minneq_map）
+│   ├── baseline_mapping.py     # 基线 mapping（twos_complement_map、conventional_map、minneq_map）
 │   ├── mapping_optimizer.py    # 代理目标优化器（保留，不在主对比链路）
 │   ├── col_log_prob.py         # 解析列概率核心函数（p_err 表、log P_c 计算）
 │   ├── accuracy_optimizer.py   # Proposed1：max Σ log P_c
-│   ├── mac_accuracy_optimizer.py    # Proposed2：all-ones E2E 目标
-│   ├── mac_accuracy_optimizer_p3.py # Proposed3：CRN 对齐 E2E 目标
+│   ├── mac_accuracy_optimizer.py    # Proposed2：all-ones E2E 目标（保留）
+│   ├── mac_accuracy_optimizer_p3.py # Proposed3：CRN 对齐 E2E 目标（保留）
 │   │
 │   │   ── Phase 4：精度评估 ──
-│   └── cim_accuracy.py         # CIM bit-serial MAC 精度仿真（量化整数模型）
+│   └── cim_accuracy.py         # CIM bit-serial MAC 精度仿真（三路：TC/Conv/Proposed）
 │
 ├── Results/                    # 中间数值结果（.npz，自动生成）
 └── Figures/                    # 图片输出（plot_inno2.py 生成）
@@ -77,15 +77,16 @@ cd VADM
 python run_inno2.py
 ```
 
-默认使用**快速解析校准**（`FAST_MODE=True`），Phase 1 在数秒内完成。整个流程依次执行 Phase 1–4，在一个随机 $64\times64$ 权重块上比较五种方法：
+默认使用**快速解析校准**（`FAST_MODE=True`），Phase 1 在数秒内完成。整个流程依次执行 Phase 1–4，在一个随机 $64\times64$ 权重块上对比四种方法：
 
 | 方法 | 模块 | 优化目标 |
 |:----:|:----:|:--------:|
-| Conventional | `baseline_mapping.py` | 无优化（标准二进制分解） |
+| **TC（二补码）** | `baseline_mapping.py` | 无优化（最高位为符号位，低位非负；最传统数字存储方式） |
+| **Conventional（差分幅值码）** | `baseline_mapping.py` | 无优化（符号幅值分解，正负极板各自独立） |
 | Min-neq SDR | `baseline_mapping.py` | 最小化等效活跃数 |
-| Proposed1 | `accuracy_optimizer.py` | $\max \sum_c \log P_c$（all-ones bit-plane objective） |
-| Proposed2 | `mac_accuracy_optimizer.py` | all-ones INT8 end-to-end exact-match objective |
-| Proposed3 | `mac_accuracy_optimizer_p3.py` | random-INT8 CRN-aligned end-to-end exact-match objective |
+| **Proposed1** | `accuracy_optimizer.py` | $\max \sum_c \log P_c$（all-ones bit-plane objective） |
+
+Phase 4 输出**三路精度对比**：TC / Conventional / Proposed1。
 
 ### 4.2 命令行选项
 
@@ -150,7 +151,19 @@ python src/accuracy_optimizer.py
 
 ## 6. 算法原理
 
-### 6.1 SDR 分解
+### 6.1 三种 Mapping 方案对比
+
+| 方案 | 负权重存储方式 | B_minus 激活情况 | B_plus/Q_plus 激活情况 |
+|:----:|:-------------:|:----------------:|:---------------------:|
+| **TC（二补码）** | 最高位 $d^B_{K_B-1}=-1$（符号位），低位非负 | 仅 MSB 平面 | 所有低位平面均可激活 |
+| **Conventional（差分幅值码）** | 全部数字取负 | 所有非零平面 | 无 |
+| **Proposed1** | 优化后：尽量令所有平面全 1（对齐全局最优） | 见优化结果 | 见优化结果 |
+
+**关键区别**：对于负权重 $w \in [-\lambda_{K_B-1},\, -1]$（即 $[-64, -1]$），TC 使低位正极板（B_plus/Q_plus）保持活跃，列活跃数更高，导致 CIM 量化误差更大；而差分幅值码只激活负极板，列活跃数更低。Proposed1 通过直接优化 $\sum_c \log P_c$ 进一步降低误差。
+
+> **TC 的表示范围**：在默认配置（$K_B=3, K_Q=2$，$\lambda_{K_B-1}=64$）下，严格二补码仅能表示 $[-64, 127]$；对于 $w < -64$ 的权重，自动回退到符号幅值分解（两者在此范围等价）。
+
+### 6.2 SDR 分解
 
 每个 INT8 权重 $w \in [-127, 127]$ 被分解为：
 
@@ -164,7 +177,7 @@ $$w = \sum_{m=0}^{K_B-1} \lambda_B[m]\, d^B_m \;+\; \sum_{t=0}^{K_Q-1} \lambda_Q
 $$B^+_m = \max(d^B_m, 0),\quad B^-_m = \max(-d^B_m, 0)$$
 $$Q^+_t = \max(d^Q_t, 0),\quad Q^-_t = \max(-d^Q_t, 0)$$
 
-### 6.2 精度直接优化器（主算法）
+### 6.3 精度直接优化器（主算法）
 
 #### 核心目标
 
@@ -244,7 +257,7 @@ until not improved
 | 理论保证 | 代理与真实目标相关性弱 | 单调优化，理论等价于 CIM 精度 |
 | 系统偏差捕获 | 仅通过 $N_\text{th}$ 间接近似 | 直接计算包含系统偏差的完整分布 |
 
-### 6.3 Phase 1 校准——确定器件统计量
+### 6.4 Phase 1 校准——确定器件统计量
 
 **快速模式**（`FAST_MODE=True`，默认）：
 
@@ -286,7 +299,7 @@ $N_\text{th}$ 定义为满足 $p_\text{err}(n) \leq \varepsilon$ 的最大 $n$�
 | 相对 L2 误差 | $\|y_\text{CIM} - y_\text{ref}\|_2 / \|y_\text{ref}\|_2$ 均值/标准差 |
 | Per-plane PE 错误率 | 各 bit-plane 量化错误次数占比 |
 
-Phase 4 输出四路对比：**Conventional vs Proposed1 vs Proposed2 vs Proposed3**。
+Phase 4 输出**三路对比**：**TC（二补码）vs Conventional（差分幅值码）vs Proposed1**。
 
 ---
 
@@ -298,12 +311,11 @@ Phase 4 输出四路对比：**Conventional vs Proposed1 vs Proposed2 vs Propose
 | `kappa_final.npz` | 同上 + $p_\text{err}$ 曲线数组 | Phase 1 |
 | `error_prob_1bit.npz` | $n$，$p^{(1b)}_\text{err}(n)$ | Phase 1 |
 | `error_prob_2bit.npz` | $n_\text{eq}$，$p^{(2b)}_\text{err}(n_\text{eq})$ | Phase 1 |
-| `result_conventional.npz` | Conventional mapping 统计量 | Phase 2 |
+| `result_tc.npz` | TC（二补码）mapping 统计量 | Phase 2 |
+| `result_conventional.npz` | Conventional（差分幅值码）mapping 统计量 | Phase 2 |
 | `result_minneq.npz` | Min-neq SDR mapping 统计量 | Phase 2 |
 | `result_proposed1.npz` | Proposed1 mapping 统计量 | Phase 3 |
-| `result_proposed2.npz` | Proposed2 mapping 统计量 | Phase 3b |
-| `result_proposed3.npz` | Proposed3 mapping 统计量 | Phase 3c |
-| `cim_accuracy.npz` | 四路精度对比（exact match、余弦、L2、PE 错误率） | Phase 4 |
+| `cim_accuracy.npz` | 三路精度对比（TC/Conv/Proposed，exact match、余弦、L2、PE 错误率） | Phase 4 |
 
 ---
 
