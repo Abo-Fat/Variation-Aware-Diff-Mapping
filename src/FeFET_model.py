@@ -7,10 +7,10 @@ Physical model:
   Variation: Vth ~ N(μ_i, σ_i²) per programmed state i
 
 2-bit FeFET weight states (high weight = low Vth = high current):
-  weight=3 (state 0): μ_vth=-0.96 V, σ=54.6 mV  → highest current (on)
-  weight=2 (state 1): μ_vth=-0.53 V, σ=50.5 mV
-  weight=1 (state 2): μ_vth=-0.023 V, σ=61.9 mV
-  weight=0 (state 3): μ_vth= 0.52 V, σ=61.4 mV  → lowest current (off / Ioff)
+  logical state / weight 3 -> internal state_idx 0: μ_vth=-0.96 V,  σ=54.6 mV
+  logical state / weight 2 -> internal state_idx 1: μ_vth=-0.53 V,  σ=50.5 mV
+  logical state / weight 1 -> internal state_idx 2: μ_vth=-0.023 V, σ=61.9 mV
+  logical state / weight 0 -> internal state_idx 3: μ_vth= 0.52 V,  σ=61.4 mV
 
 Input gate voltages:
   2-bit: input {0,1,2,3} → Vg ∈ {-1.2, -0.74, -0.275, 0.25} V
@@ -23,13 +23,13 @@ I_ratio = I_real(Vg_ref, Vth_sampled) / I_real(Vg_ref, Vth_nominal)
 is applied to the bit-plane MAC.
 
 Supported modes (FEFET_MODE):
-  '1bit'  – every bit plane is an independent 1-bit cell.
-              On-state (bit=1): state 0 (Vth=-0.96 V); Vg_ref = vg_input_levels[-1] = -0.275 V.
-  '2bit'  – adjacent bit-plane pairs (2j, 2j+1) share one physical 2-bit cell.
-              Cell value 0-3 → device state 3-0; Vg_ref = vg_input_levels[-1] = 0.25 V.
-  'mixed' – LSB planes (index < split_bit) use 2-bit paired cells (Vg_ref = 0.25 V);
+  '1bit'  — every bit plane is an independent 1-bit cell.
+              On-state (bit=1): state_idx 0 (lowest Vth); Vg_ref = vg_input_levels[-1] = -0.275 V.
+  '2bit'  — adjacent bit-plane pairs (2j, 2j+1) share one physical 2-bit cell.
+              Cell value 0-3 → state_idx 3-0; Vg_ref = vg_input_levels[-1] = 0.25 V.
+  'mixed' — LSB planes (index < split_bit) use 2-bit paired cells (Vg_ref = 0.25 V);
               MSB planes (index ≥ split_bit) use individual 1-bit cells
-              (on-state = state 0, Vg_ref = mixed_1bit_vg_on ≈ -0.275 V).
+              (on-state = state_idx 0, Vg_ref = mixed_1bit_vg_on ≈ -0.275 V).
               Motivation: MSB cells are more critical for accuracy, so using only the
               two extreme states (highest contrast) gives better noise margin.
 """
@@ -76,8 +76,9 @@ class FeFETVariationModel:
             vg_input_levels   : list of Vgate voltages for each digital input level.
                                   '2bit' / 'mixed' default: [-1.2, -0.74, -0.275, 0.25]
                                   '1bit' default:           [-1.2, -0.275]
-            vth_states        : list of 4 nominal Vth [V], ordered state 0→3
-                                (state 0 = lowest Vth / highest current)
+            vth_states        : list of 4 nominal Vth [V], ordered by internal
+                                state index 0→3 (0=lowest Vth, 3=highest Vth).
+                                Logical cell state/weight is the reverse order 3→0.
             sigma_vth         : list of 4 Vth std-deviations [V]
             mixed_split_bit   : (mixed mode only) bit-plane index where the transition
                                 from 2-bit cells to 1-bit cells occurs.
@@ -129,13 +130,13 @@ class FeFETVariationModel:
             np.argmin(np.abs(self._vg_levels_np - mixed_1bit_vg_on))
         )
 
-        # CIM integer weight value → device state index
-        # High weight value = low Vth (high current) = low state index
+        # CIM integer weight value -> internal device state index
+        # Logical state/weight 3..0 maps to internal state_idx 0..3.
         if mode == '1bit':
-            # value {0,1} → state {3,0}
+        # value {0,1} -> state_idx {3,0}
             self._val2state_np = np.array([3, 0], dtype=np.int64)
         else:  # '2bit' or 'mixed'
-            # value {0,1,2,3} → state {3,2,1,0}
+            # value {0,1,2,3} -> state_idx {3,2,1,0}
             self._val2state_np = np.array([3, 2, 1, 0], dtype=np.int64)
 
         # Build 2-D LUT: _lut_I_np[vg_idx, vth_idx] = I_cell [A]
@@ -281,12 +282,13 @@ class FeFETVariationModel:
             result[i0] = lsb.float() * ratio
             result[i1] = msb.float() * ratio
 
-        # Odd trailing plane (treated as a 1-bit cell using the 2-bit on-state logic)
+        # Odd trailing plane: treat as a 1-bit cell.
+        # Keep convention consistent with the rest of the codebase:
+        # bit=1 -> state_idx 0 (lowest Vth / highest current), bit=0 -> off.
         if n % 2 == 1:
             ip = planes[-1]
             plane = w_bits[ip]
-            # Use the same state as val2state[1] (one-valued bit → next-to-lowest Vth in 2-bit)
-            s_on   = val2state[min(1, val2state.shape[0] - 1)]
+            s_on   = torch.tensor(0, dtype=torch.long, device=plane.device)
             vth_on = vth_states[s_on]
             sig_on = sigma_vth[s_on]
             delta  = torch.randn_like(plane) * (vth_sigma_scale * sig_on)
@@ -298,10 +300,10 @@ class FeFETVariationModel:
                                sigma_vth, fp_ref_1bit, vth_sigma_scale, result):
         """
         Apply 1-bit individual variation to bit planes in plane_slice.
-        Every plane is independent; on-state always uses device state 0 (Vth=-0.96 V).
+        Every plane is independent; on-state always uses state_idx 0 (lowest Vth).
         Modifies `result` in-place.
         """
-        # State 0: lowest Vth = strongest on-state, best noise margin
+        # state_idx 0: lowest Vth = strongest on-state, best noise margin
         vth_on = vth_states[0]
         sig_on = sigma_vth[0]
 
@@ -321,18 +323,18 @@ class FeFETVariationModel:
         Apply Vth variation to weight bit planes for the bit-plane MAC.
 
         Mode '1bit':
-          Every bit plane is independent. On-state (bit=1) uses device state 0
+          Every bit plane is independent. On-state (bit=1) uses state_idx 0
           (Vth=-0.96 V). Vg_ref = vg_input_levels[-1] = -0.275 V.
 
         Mode '2bit':
           Adjacent bit-plane pairs (2j, 2j+1) share one physical 2-bit cell.
-          Cell value 0-3 determines the device state. Vg_ref = 0.25 V.
+          Cell value 0-3 determines the internal state_idx. Vg_ref = 0.25 V.
           An odd trailing plane is treated individually (see _apply_2bit_pairs).
 
         Mode 'mixed':
           Bit planes [0, split_bit) → 2-bit paired cells (Vg_ref = 0.25 V).
           Bit planes [split_bit, n_planes) → 1-bit individual cells using
-            device state 0 exclusively (Vg_ref = mixed_1bit_vg_on ≈ -0.275 V).
+            state_idx 0 exclusively (Vg_ref = mixed_1bit_vg_on ≈ -0.275 V).
 
         Args:
             w_bits         : float tensor [n_planes, out_ch, in_feat], values in {0, 1}
@@ -382,7 +384,7 @@ class FeFETVariationModel:
                     vth_states, sigma_vth, val2state, fp_ref_high, vth_sigma_scale, result
                 )
 
-            # MSB section: 1-bit individual cells (state 0 = highest contrast)
+            # MSB section: 1-bit individual cells (state_idx 0 = highest contrast)
             if split_even < n_planes:
                 self._apply_1bit_individual(
                     w_bits, range(split_even, n_planes), lut_vth, lut_I,
@@ -508,11 +510,11 @@ class FeFETVariationModel:
         Charge-based 1-bit CIM cell output using a single read voltage.
 
         Each cell stores one bit:
-          bit = 1  →  device programmed to state 0 (Vth ≈ -0.96 V, ON)
-          bit = 0  →  device programmed to state 3 (Vth ≈ +0.52 V, OFF)
+          bit = 1  →  device programmed to state_idx 0 (Vth ≈ -0.96 V, ON)
+          bit = 0  →  device programmed to state_idx 3 (Vth ≈ +0.52 V, OFF)
 
         Output normalised by Q0: ideal Q_eff ≈ {0, 1}.
-        The small leakage for bit=0 (off-state current of state 3) is
+        The small leakage for bit=0 (off-state current of state_idx 3) is
         physically modelled — unlike the ratio approach which gives exactly 0.
 
         Args:
@@ -532,10 +534,10 @@ class FeFETVariationModel:
         bit_plane = bit_plane.to(device)
         mask_on   = bit_plane > 0.5          # True where bit == 1
 
-        # State 0: lowest Vth = ON state (bit=1)
+        # state_idx 0: lowest Vth = ON state (bit=1)
         vth_on  = vth_states[0]              # scalar
         sig_on  = sigma_vth[0]
-        # State 3: highest Vth = OFF state (bit=0)
+        # state_idx 3: highest Vth = OFF state (bit=0)
         vth_off = vth_states[3]              # scalar
         sig_off = sigma_vth[3]
 

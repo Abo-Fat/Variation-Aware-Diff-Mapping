@@ -38,7 +38,9 @@ from column_stats import (count_1bit_columns,
                           count_2bit_eq_columns,
                           compute_J_c,
                           compute_S_c,
+                          compute_S_c_uniform,
                           compute_objective,
+                          compute_objective_corrected,
                           compute_mean_n1b_per_plane,
                           compute_mean_neq_per_plane,
                           load_calibration)
@@ -58,9 +60,11 @@ def _build_result(W, D_B, D_Q, cal, method):
     n1b = count_1bit_columns(D_B)
     neq = count_2bit_eq_columns(D_Q, cal['kappa_2'], cal['kappa_3'])
 
-    J_c = compute_J_c(n1b, neq, cal['N_th_1b'], cal['N_th_2b'])
-    S_c = compute_S_c(n1b, neq)
-    obj = compute_objective(J_c, S_c)
+    J_c   = compute_J_c(n1b, neq, cal['N_th_1b'], cal['N_th_2b'])
+    S_c   = compute_S_c(n1b, neq)           # weighted (legacy, kept for reference)
+    S_raw = compute_S_c_uniform(n1b, neq)   # uniform active-digit count
+    obj   = compute_objective_corrected(     # corrected: weighted J + η·norm S
+        J_c, n1b, neq, cal['N_th_1b'], cal['N_th_2b'])
 
     return {
         'planes':   planes,
@@ -68,8 +72,10 @@ def _build_result(W, D_B, D_Q, cal, method):
         'D_Q':      D_Q,
         'J_c':      J_c,
         'S_c':      S_c,
+        'S_raw':    S_raw,
         'J_total':  float(J_c.sum()),
         'S_total':  float(S_c.sum()),
+        'S_raw_total': float(S_raw.sum()),
         'obj':      obj,
         'mean_n1b': compute_mean_n1b_per_plane(D_B),
         'mean_neq': compute_mean_neq_per_plane(

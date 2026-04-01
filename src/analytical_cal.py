@@ -142,24 +142,24 @@ def compute_device_stats(lut=None, sigma_scale=None, n_quad=400, verbose=False):
     if sigma_scale  is None: sigma_scale  = cfg.VTH_SIGMA_SCALE
 
     vth_ax    = lut['vth_ax']
-    vth       = lut['vth']          # [4]  nominal Vth per device state
-    sigma     = lut['sigma']        # [4]  sigma_vth per device state
-    val2state = lut['val2state']    # cell val -> device state
+    vth       = lut['vth']          # [4]  nominal Vth per internal state index
+    sigma     = lut['sigma']        # [4]  sigma_vth per internal state index
+    val2state = lut['val2state']    # cell value -> internal state index (0->3, 1->2, 2->1, 3->0)
     sig_r     = lut['sig_r']
 
-    # ── 2-bit stats (cell values 0,1,2,3) ──────────────────────────────
+    # ── 2-bit stats (cell values 0,1,2,3; physical strength increases with cell value) ──
     stats_2bit = {}
-    for cv in range(4):
+    for cv in (3, 2, 1, 0):
         state = int(val2state[cv])
         mu_v  = vth[state]
         sig_v = sigma[state] * sigma_scale
         mu_Q, var_Q = _gauss_lut_stats(mu_v, sig_v, vth_ax, lut['Q2bit'], sig_r, n_quad)
         stats_2bit[cv] = {'mu': mu_Q, 'var': var_Q}
         if verbose:
-            print(f"  2-bit cv={cv} (state {state}): "
+            print(f"  2-bit cv={cv} (state_idx={state}): "
                   f"μ_Q={mu_Q:.4f}  σ_Q={var_Q**0.5:.4f}")
 
-    # ── 1-bit stats (ON = state 0, OFF = state 3) ───────────────────────
+    # ── 1-bit stats (ON = state_idx 0 / lowest Vth, OFF = state_idx 3 / highest Vth) ──
     stats_1bit = {}
     for label, state in [('on', 0), ('off', 3)]:
         mu_v  = vth[state]
@@ -167,7 +167,7 @@ def compute_device_stats(lut=None, sigma_scale=None, n_quad=400, verbose=False):
         mu_Q, var_Q = _gauss_lut_stats(mu_v, sig_v, vth_ax, lut['Q1bit'], sig_r, n_quad)
         stats_1bit[label] = {'mu': mu_Q, 'var': var_Q}
         if verbose:
-            print(f"  1-bit {label} (state {state}): "
+            print(f"  1-bit {label} (state_idx={state}): "
                   f"μ_Q={mu_Q:.4f}  σ_Q={var_Q**0.5:.4f}")
 
     return stats_1bit, stats_2bit
@@ -335,7 +335,7 @@ def run_analytical_calibration(sigma_scale=None, epsilon=None,
               f"σ={stats_1bit['on']['var']**0.5:.4f}")
         print(f"    1-bit OFF : {stats_1bit['off']['mu']:.4f}  "
               f"σ={stats_1bit['off']['var']**0.5:.4f}")
-        for cv in range(4):
+        for cv in (3, 2, 1, 0):
             print(f"    2-bit cv={cv}: {stats_2bit[cv]['mu']:.4f}  "
                   f"σ={stats_2bit[cv]['var']**0.5:.4f}")
 

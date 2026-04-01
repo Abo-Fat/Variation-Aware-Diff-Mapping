@@ -2,7 +2,7 @@
 Innovation 2 — Paper figure plotting script.
 
 Figure 1: Device statistics → "equivalent active-count" calibration figure
-  (a) Single-device charge output distributions (1-bit ON/OFF, 2-bit cv=0..3)
+  (a) Single-device charge output distributions (1-bit ON/OFF, 2-bit shown as cv=3..0)
   (b) Column error probability vs active count / equivalent active count,
       with N_th^{1b} and N_th^{2b} marked
 
@@ -87,7 +87,7 @@ def plot_fig1():
     # ── (a) Single-device distributions ──────────────────────────────────
     ax = axes[0]
 
-    PALETTE_2B = ['#aec7e8', '#6baed6', '#2166ac', '#08306b']  # light→dark blue for cv 0→3
+    PALETTE_2B = ['#aec7e8', '#6baed6', '#2166ac', '#08306b']  # cv 0..3 color map (higher cv is darker)
 
     # 1-bit states
     for key, col, ls, lbl in [
@@ -99,8 +99,8 @@ def plot_fig1():
         x   = np.linspace(mu - 5*sig, mu + 5*sig, 400)
         ax.plot(x, norm.pdf(x, mu, sig), color=col, linestyle=ls, label=lbl)
 
-    # 2-bit cell values 0..3
-    for cv in range(4):
+    # 2-bit cell values displayed in physical-strength order: 3 -> 0
+    for cv in (3, 2, 1, 0):
         mu  = stats_2bit[cv]['mu']
         sig = max(stats_2bit[cv]['var'], 1e-30) ** 0.5
         x   = np.linspace(mu - 5*sig, mu + 5*sig, 400)

@@ -16,8 +16,8 @@ FEFET_I0           = 1e-9           # Drain current at Vth [A]
 FEFET_R_LIMIT      = 1e6            # Current-limiting resistor [Ohm]
 FEFET_VD           = 0.1            # Drain voltage [V]
 
-FEFET_VTH_STATES   = [-0.96, -0.53, -0.023, 0.52]          # state 0..3 nominal Vth [V]
-FEFET_SIGMA_VTH    = [0.0546, 0.0505, 0.0619, 0.0614]       # state 0..3 sigma_vth [V]
+FEFET_VTH_STATES   = [-0.96, -0.53, -0.023, 0.52]          # internal state index 0..3 (0=lowest Vth, 3=highest Vth)
+FEFET_SIGMA_VTH    = [0.0546, 0.0505, 0.0619, 0.0614]       # matches FEFET_VTH_STATES index order
 
 # Staircase read (2-bit)
 FEFET_VG_STEPS_2BIT = [-0.5, 0.0, 0.5]   # [V]
@@ -96,3 +96,16 @@ KAPPA_3 = None     # filled by kappa_calibration.py
 # Sparsity-penalty coefficient η in objective: Σ_c J_c + η Σ_c S_c
 # ------------------------------------------------------------------------------
 ETA = 0.1
+
+# Optimizer sparsity mode:
+#   'weighted'       -> original lambda^2-weighted sparsity (legacy)
+#   'uniform'        -> unweighted equivalent active counts
+#   'nth_normalized' -> normalize counts by N_th (recommended)
+SPARSITY_MODE = 'nth_normalized'
+
+# Optimizer overload mode:
+#   'weighted'       -> lambda^2-weighted hinge: penalises MSB overloads more
+#                       than LSB overloads, matching their CIM error impact
+#   'uniform'        -> unweighted hinge
+#   'nth_normalized' -> hinge on normalized overload (discards error weighting)
+OVERLOAD_MODE = 'weighted'

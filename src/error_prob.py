@@ -35,9 +35,9 @@ def compute_initial_kappa():
     """
     kappa_s = sigma_s^2 / sigma_1^2   (s=2,3 in cell-value indexing)
 
-    Cell value 1 -> device state 2  (sigma_vth[2])
-    Cell value 2 -> device state 1  (sigma_vth[1])
-    Cell value 3 -> device state 0  (sigma_vth[0])
+    Cell value 1 -> state_idx 2  (sigma_vth[2])
+    Cell value 2 -> state_idx 1  (sigma_vth[1])
+    Cell value 3 -> state_idx 0  (sigma_vth[0])
 
     BUT for the column charge sum, the relevant noise is the charge variance,
     not the Vth variance. Since the Q-LUT is nearly linear in Vth over the
@@ -45,16 +45,16 @@ def compute_initial_kappa():
     kappa_s = sigma_Q_s^2 / sigma_Q_1^2 ≈ sigma_vth_s^2 / sigma_vth_1^2.
 
     Cell value convention:
-      cell_val 0 -> device state 3 (off)
-      cell_val 1 -> device state 2
-      cell_val 2 -> device state 1
-      cell_val 3 -> device state 0 (most on)
+      cell_val 0 -> state_idx 3 (off)
+      cell_val 1 -> state_idx 2
+      cell_val 2 -> state_idx 1
+      cell_val 3 -> state_idx 0 (most on)
     """
     sigma = np.array(cfg.FEFET_SIGMA_VTH)   # [s0, s1, s2, s3]
-    # val2state: cell val s -> device state (3-s)
-    # state for cell val 1: device state 2  -> sigma[2]
-    # state for cell val 2: device state 1  -> sigma[1]
-    # state for cell val 3: device state 0  -> sigma[0]
+    # val2state: cell value s -> state_idx (3-s)
+    # state for cell val 1: state_idx 2  -> sigma[2]
+    # state for cell val 2: state_idx 1  -> sigma[1]
+    # state for cell val 3: state_idx 0  -> sigma[0]
     sigma_cv1 = sigma[2]   # cell val 1
     sigma_cv2 = sigma[1]   # cell val 2
     sigma_cv3 = sigma[0]   # cell val 3

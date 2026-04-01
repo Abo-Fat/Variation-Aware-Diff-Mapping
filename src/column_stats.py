@@ -148,9 +148,65 @@ def compute_S_c(n1b, neq, alpha=None, beta=None):
 
 
 def compute_objective(J_c, S_c, eta=None):
-    """Full objective = Σ_c J_c + η Σ_c S_c."""
+    """Full objective = Σ_c J_c + η Σ_c S_c.  (legacy weighted S_c)"""
     if eta is None: eta = cfg.ETA
     return float(J_c.sum()) + eta * float(S_c.sum())
+
+
+def compute_S_c_uniform(n1b, neq):
+    """
+    Uniform (unweighted) active-digit count per column.
+
+      S_c_raw = Σ_m n1b[m,c]  +  Σ_t neq[t,c]
+
+    Unlike compute_S_c, no α_m / β_t weighting is applied, so every
+    active digit in every plane contributes equally.  This is the correct
+    sparsity proxy for comparing mappings: min-neq correctly scores lower
+    (sparser) than conventional under this metric.
+
+    Parameters
+    ----------
+    n1b : ndarray [KB, N]
+    neq : ndarray [KQ, N]
+
+    Returns
+    -------
+    S_raw : ndarray [N]  float64
+    """
+    return n1b.sum(axis=0).astype(np.float64) + neq.sum(axis=0).astype(np.float64)
+
+
+def compute_objective_corrected(J_c, n1b, neq, N_th_1b, N_th_2b, eta=None):
+    """
+    Corrected full objective = Σ_c J_c(weighted)  +  η Σ_c S_c(nth_normalised).
+
+      obj = Σ_c J_c  +  η · Σ_c (Σ_m n1b[m,c]/N_th_1b + Σ_t neq[t,c]/N_th_2b)
+
+    J_c keeps the error-importance weighting (α_m = λ_B[m]²) so MSB
+    overloads are penalised more.  S_c uses N_th-normalised uniform counts
+    so the sparsity incentive does not bias toward any particular plane.
+
+    Under this metric min-neq correctly scores lower than conventional
+    because J_total(min-neq) < J_total(conventional).
+
+    Parameters
+    ----------
+    J_c      : ndarray [N]  weighted per-column risk (from compute_J_c)
+    n1b      : ndarray [KB, N]
+    neq      : ndarray [KQ, N]
+    N_th_1b  : float
+    N_th_2b  : float
+    eta      : float  (defaults to cfg.ETA)
+
+    Returns
+    -------
+    obj : float
+    """
+    if eta is None: eta = cfg.ETA
+    d1 = max(float(N_th_1b), 1e-12)
+    d2 = max(float(N_th_2b), 1e-12)
+    S_norm = (n1b.sum(axis=0) / d1 + neq.sum(axis=0) / d2).sum()
+    return float(J_c.sum()) + eta * float(S_norm)
 
 
 # ---------------------------------------------------------------------------

@@ -128,13 +128,15 @@ def _phase1_mc(skip_mc=False):
 def _save_result(res, stem):
     """Save a mapping result dict to Results/<stem>.npz."""
     np.savez(os.path.join(RESULTS_DIR, f'{stem}.npz'),
-             J_c      = res['J_c'],
-             S_c      = res['S_c'],
-             J_total  = res['J_total'],
-             S_total  = res['S_total'],
-             obj      = res['obj'],
-             mean_n1b = res['mean_n1b'],
-             mean_neq = res['mean_neq'])
+             J_c          = res['J_c'],
+             S_c          = res['S_c'],
+             S_raw        = res.get('S_raw', res['S_c']),
+             J_total      = res['J_total'],
+             S_total      = res['S_total'],
+             S_raw_total  = res.get('S_raw_total', res['S_total']),
+             obj          = res['obj'],
+             mean_n1b     = res['mean_n1b'],
+             mean_neq     = res['mean_neq'])
 
 
 # ---------------------------------------------------------------------------
@@ -198,17 +200,19 @@ def phase23(W=None):
 
     # Summary table
     print("\n" + "=" * 60)
-    print("Summary comparison")
-    print(f"  {'Metric':<18} {'Conventional':>14} {'Min-neq':>14} {'Proposed':>14}")
-    print(f"  {'-'*62}")
-    for key in ('J_total', 'S_total', 'obj'):
+    print("Summary comparison  (obj = weighted J + η·nth_normalised S)")
+    print(f"  {'Metric':<20} {'Conventional':>14} {'Min-neq':>14} {'Proposed':>14}")
+    print(f"  {'-'*64}")
+    for key in ('J_total', 'S_raw_total', 'obj'):
         cv = res_conv[key]
         mn = res_mneq[key]
         pr = res_prop[key]
-        r1 = 100.0 * (cv - mn) / max(cv, 1e-12)
-        r2 = 100.0 * (cv - pr) / max(cv, 1e-12)
-        print(f"  {key:<18} {cv:>14.4f} {mn:>13.4f} ({r1:+.1f}%) "
+        r1 = 100.0 * (cv - mn) / max(abs(cv), 1e-12)
+        r2 = 100.0 * (cv - pr) / max(abs(cv), 1e-12)
+        print(f"  {key:<20} {cv:>14.4f} {mn:>13.4f} ({r1:+.1f}%) "
               f"{pr:>13.4f} ({r2:+.1f}%)")
+    print(f"  {'(S_total legacy)':<20} {res_conv['S_total']:>14.1f} "
+          f"{res_mneq['S_total']:>14.1f} {res_prop['S_total']:>14.1f}")
 
     return W, res_conv, res_mneq, res_prop
 
@@ -230,7 +234,7 @@ def phase4(W, res_base, res_opt):
         planes_base = res_base['planes'],
         planes_opt  = res_opt['planes'],
         sigma       = cfg.VTH_SIGMA_SCALE,
-        N_vec       = 100,
+        N_vec       = 1000,
         seed        = 2026,
         device      = 'cpu',
         verbose     = True,
@@ -239,18 +243,26 @@ def phase4(W, res_base, res_opt):
     print_accuracy_comparison(acc)
 
     np.savez(os.path.join(RESULTS_DIR, 'cim_accuracy.npz'),
-             baseline_cos_mean    = acc['baseline_cos_mean'],
-             baseline_cos_std     = acc['baseline_cos_std'],
-             baseline_rel_l2_mean = acc['baseline_rel_l2_mean'],
-             baseline_rel_l2_std  = acc['baseline_rel_l2_std'],
-             proposed_cos_mean    = acc['proposed_cos_mean'],
-             proposed_cos_std     = acc['proposed_cos_std'],
-             proposed_rel_l2_mean = acc['proposed_rel_l2_mean'],
-             proposed_rel_l2_std  = acc['proposed_rel_l2_std'],
-             N_vec   = acc['N_vec'],
-             sigma   = acc['sigma'],
-             clip_1b = acc['clip_1b'],
-             clip_2b = acc['clip_2b'])
+             baseline_exact_rate     = acc['baseline_exact_rate'],
+             proposed_exact_rate     = acc['proposed_exact_rate'],
+             baseline_cos_mean       = acc['baseline_cos_mean'],
+             baseline_cos_std        = acc['baseline_cos_std'],
+             baseline_rel_l2_mean    = acc['baseline_rel_l2_mean'],
+             baseline_rel_l2_std     = acc['baseline_rel_l2_std'],
+             proposed_cos_mean       = acc['proposed_cos_mean'],
+             proposed_cos_std        = acc['proposed_cos_std'],
+             proposed_rel_l2_mean    = acc['proposed_rel_l2_mean'],
+             proposed_rel_l2_std     = acc['proposed_rel_l2_std'],
+             baseline_pe_rate_1b     = acc['baseline_pe_rate_1b'],
+             proposed_pe_rate_1b     = acc['proposed_pe_rate_1b'],
+             baseline_pe_rate_2b     = acc['baseline_pe_rate_2b'],
+             proposed_pe_rate_2b     = acc['proposed_pe_rate_2b'],
+             lambda_B = acc['lambda_B'],
+             lambda_Q = acc['lambda_Q'],
+             N_vec    = acc['N_vec'],
+             sigma    = acc['sigma'],
+             clip_1b  = acc['clip_1b'],
+             clip_2b  = acc['clip_2b'])
     print("[Phase 4] Done.")
 
 

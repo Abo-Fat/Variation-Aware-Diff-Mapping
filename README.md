@@ -57,7 +57,7 @@ VADM/
 │   ├── mapping_optimizer.py    # 提出的逐列 SDR 优化器（Algorithm 1）
 │   │
 │   │   ── Phase 4：精度评估 ──
-│   └── cim_accuracy.py         # CIM bit-serial MAC 精度仿真（余弦相似度、相对 L2 误差）
+│   └── cim_accuracy.py         # CIM bit-serial MAC 精度仿真（量化整数模型：exact match rate、PE 错误率、余弦/L2）
 │
 ├── Results/                    # 中间数值结果（.npz，自动生成）
 └── Figures/                    # 图片输出（plot_inno2.py 生成）
@@ -237,15 +237,38 @@ $N_\text{th}$ 定义为满足 $p_\text{err}(n) \leq \varepsilon$ 的最大 $n$�
 
 ---
 
-## 7. Phase 4 — CIM MAC 精度评估
+## 7. Phase 4 — CIM MAC 精度评估（量化整数模型）
 
 **固定芯片模型**：$V_\text{th}$ 变异在权重矩阵级别采样一次，所有测试向量复用同一套器件特性，模拟真实芯片行为。
 
-**Bit-serial 输入**：INT8 输入向量 $x$ 按两补码逐位分解（bit 0–6 权重为 $2^k$，bit 7 权重为 $-128$）。每个 bit 周期对 1-bit/2-bit PE 平面分别执行列求和并截断（clip $\pm M$ / $\pm 3M$），加权累积得到 CIM 输出 $y_\text{CIM}$。
+**Bit-serial 输入**：INT8 输入向量 $x$ 按两补码逐位分解（bit 0–6 权重为 $2^k$，bit 7 权重为 $-128$）。
 
-**精度指标**（对 $N_\text{vec}=100$ 个随机 INT8 向量取均值和标准差）：
-- 余弦相似度 $\cos(y_\text{CIM},\, y_\text{ref})$
-- 相对 L2 误差 $\|y_\text{CIM} - y_\text{ref}\|_2 / \|y_\text{ref}\|_2$
+**三步 PE 计算模型**：每个 PE（一列、一个 bit-plane）依次执行：
+
+1. **模拟积分**：列电荷加和（含 $V_\text{th}$ 变异）
+
+$$S^\text{phys}[j] = \sum_i x^\text{bit}_k[i]\cdot Q^\text{eff}_\text{cell}[i,j] \quad \text{（连续浮点）}$$
+
+2. **量化读出**（ADC / Sense-Amp）：
+
+$$S^\text{quant}[j] = \operatorname{clip}\!\left(\operatorname{round}\!\left(S^\text{phys}[j]\right),\; 0,\; C\right)$$
+
+其中 1-bit 平面 $C = M$，2-bit 平面 $C = 3M$。若 $S^\text{quant}[j] \neq S^\text{ideal}[j]$（理想整数值），记为一次 **PE 量化错误事件**。
+
+3. **位权加权累积**：$y_\text{CIM}[j] \mathrel{+}= w_k \cdot \sum_m \lambda_B[m]\,(S^\text{quant}_{+,m} - S^\text{quant}_{-,m}) + \cdots$
+
+**"算对了"的定义**：$\operatorname{round}(y_\text{CIM}[j]) = y_\text{ref}[j]$，即 CIM 输出与精确整数 MAC 完全一致。
+
+**与 $N_\text{th}$ 的关联**：PE 量化错误直接对应 $J_c$ 优化器所针对的列过载事件——列活跃数 $n < N_\text{th}$ 时量化错误概率 $< \varepsilon$；超过 $N_\text{th}$ 则错误率上升，进而导致 MAC exact match rate 下降。
+
+**精度指标**（对 $N_\text{vec}=1000$ 个随机 INT8 向量统计）：
+
+| 指标 | 说明 |
+|------|------|
+| **MAC exact match rate**（主要指标）| $\operatorname{round}(y_\text{CIM}[j]) = y_\text{ref}[j]$ 的比例 |
+| 余弦相似度均值/标准差 | $\cos(y_\text{CIM},\, y_\text{ref})$ |
+| 相对 L2 误差均值/标准差 | $\|y_\text{CIM} - y_\text{ref}\|_2 / \|y_\text{ref}\|_2$ |
+| **Per-plane PE 错误率** | 各 bit-plane（p/m 侧合并）的量化错误次数占比，直接验证 $N_\text{th}$ 边界 |
 
 ---
 
@@ -260,7 +283,7 @@ $N_\text{th}$ 定义为满足 $p_\text{err}(n) \leq \varepsilon$ 的最大 $n$�
 | `result_conventional.npz` | Conventional mapping 的 $J_c$、$S_c$ 等统计量 | Phase 2 |
 | `result_minneq.npz` | Min-neq SDR mapping 统计量 | Phase 2 |
 | `result_proposed.npz` | Proposed mapping 统计量 | Phase 3 |
-| `cim_accuracy.npz` | 余弦相似度与相对 L2 误差（baseline vs proposed） | Phase 4 |
+| `cim_accuracy.npz` | MAC exact match rate、余弦相似度、相对 L2 误差、per-plane PE 错误率（baseline vs proposed） | Phase 4 |
 | `col_mc_1bit.npz` | 1-bit MC 原始列分布 $Y[n_\text{on}, N_\text{mc}]$ | Phase 1.1（仅 MC 模式） |
 | `col_mc_2bit.npz` | 2-bit MC 原始列分布 $Y[K_\text{combo}, N_\text{mc}]$ | Phase 1.1（仅 MC 模式） |
 

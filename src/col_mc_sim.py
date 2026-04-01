@@ -80,7 +80,7 @@ def _build_lut():
         'Q2bit':    Q2bit,    # [n_lut]  normalised charge for 2-bit staircase
         'vth':      vth,      # [4]      nominal Vth per state
         'sigma':    sigma,    # [4]      sigma_vth per state
-        'val2state': np.array([3, 2, 1, 0], dtype=np.int32),  # cell val -> device state
+        'val2state': np.array([3, 2, 1, 0], dtype=np.int32),  # cell value -> internal state index
         'sig_r':    float(cfg.FEFET_SIGMA_R_REL),
     }
 
@@ -104,7 +104,7 @@ def _sample_1bit_vec(n_on, M, N_mc, sigma_scale, lut):
     Y = np.zeros(N_mc, dtype=np.float64)
 
     if n_on > 0:
-        # [N_mc, n_on] Vth samples for ON-cells (device state 0)
+        # [N_mc, n_on] Vth samples for ON-cells (state_idx 0, lowest Vth)
         vth_s = vth[0] + np.random.randn(N_mc, n_on) * (sigma_scale * sigma[0])
         Q = np.interp(vth_s.ravel(), vth_ax, Q1bit).reshape(N_mc, n_on)
         if sig_r > 0.0:
@@ -112,7 +112,7 @@ def _sample_1bit_vec(n_on, M, N_mc, sigma_scale, lut):
         Y += Q.sum(axis=1)
 
     if n_off > 0:
-        # [N_mc, n_off] Vth samples for OFF-cells (device state 3)
+        # [N_mc, n_off] Vth samples for OFF-cells (state_idx 3, highest Vth)
         vth_s = vth[3] + np.random.randn(N_mc, n_off) * (sigma_scale * sigma[3])
         Q = np.interp(vth_s.ravel(), vth_ax, Q1bit).reshape(N_mc, n_off)
         if sig_r > 0.0:
