@@ -1,5 +1,5 @@
 """
-Accuracy-Direct SDR Mapping Optimizer.
+Proposed1 SDR Mapping Optimizer.
 
 Objective: maximise  sum_c  log P_c
 where      log P_c = sum_{bitplane b, side s} log(1 - p_err_{b,s}(column c))
@@ -80,10 +80,10 @@ def _init_count_arrays(D_B, D_Q, KB, KQ, N):
 # Main optimizer
 # ---------------------------------------------------------------------------
 
-def optimize_mapping_accuracy(W, cal=None, lut=None, KB=None, KQ=None,
+def optimize_mapping_proposed1(W, cal=None, lut=None, KB=None, KQ=None,
                                max_iter=10, verbose=True, seed=None):
     """
-    Accuracy-direct column-wise SDR mapping optimizer.
+    Proposed1 column-wise SDR mapping optimizer.
 
     Parameters
     ----------
@@ -263,8 +263,18 @@ def optimize_mapping_accuracy(W, cal=None, lut=None, KB=None, KQ=None,
         'log_P_total':  float(log_P.sum()),
         'mean_n1b':     compute_mean_n1b_per_plane(D_B),
         'mean_neq':     compute_mean_neq_per_plane(D_Q, kappa_2, kappa_3),
-        'method':       'accuracy_direct',
+        'method':       'proposed1',
     }
+
+
+def optimize_mapping_accuracy(W, cal=None, lut=None, KB=None, KQ=None,
+                              max_iter=10, verbose=True, seed=None):
+    """
+    Backward-compatible alias of optimize_mapping_proposed1().
+    """
+    return optimize_mapping_proposed1(
+        W=W, cal=cal, lut=lut, KB=KB, KQ=KQ,
+        max_iter=max_iter, verbose=verbose, seed=seed)
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +295,7 @@ if __name__ == '__main__':
         print("No calibration file — using placeholder thresholds.")
         cal = {'N_th_1b': 32.0, 'N_th_2b': 40.0, 'kappa_2': 1.5, 'kappa_3': 2.5}
 
-    print("Accuracy-direct optimizer (5 iters)...")
-    res = optimize_mapping_accuracy(W, cal=cal, max_iter=5, verbose=True)
-    print_summary(res, label='Accuracy-Direct')
+    print("Proposed1 optimizer (5 iters)...")
+    res = optimize_mapping_proposed1(W, cal=cal, max_iter=5, verbose=True)
+    print_summary(res, label='Proposed1')
     print(f"  log_P_total = {res['log_P_total']:.4f}")
