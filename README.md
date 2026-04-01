@@ -6,13 +6,13 @@
 
 ## 1. 背景与动机
 
-混合精度 FeFET-CIM 阵列中，每个 INT8 权重 $w_{i,j}$ 通过**有符号数字表示（SDR）**映射到 $K_B$ 个 1-bit PE 平面与 $K_Q$ 个 2-bit PE 平面上。由于同一权重存在多种等价的 SDR 分解方案，不同分解会导致各列的**等效开启器件数**（active count）分布不同，进而影响列读取时的误判概率（overload error）。
+混合精度 FeFET-CIM 阵列中，每个 INT8 权重 $w_{i,j}$ 通过**有符号数字表示（SDR）**映射到 $K_B$ 个 1-bit PE 平面与 $K_Q$ 个 2-bit PE 平面上。由于同一权重存在多种等价的 SDR 分解方案，不同分解会导致各列的**模拟累加分布**不同，进而影响量化读出的误判概率（PE error）。
 
-本模块的目标是：在给定精度配置 $(K_B, K_Q)$ 下，通过**逐列贪婪坐标下降**（Algorithm 1）为每个权重选择最优 SDR 候选，最小化加权列过载风险与稀疏性惩罚之和：
+本模块的目标是：在给定精度配置 $(K_B, K_Q)$ 下，通过**逐列贪婪坐标下降**为每个权重选择最优 SDR 候选，**直接最大化 CIM 列级精度**：
 
-$$\min_{\{d_{i,j}\}}\; \sum_c J_c + \eta \sum_c S_c$$
+$$\max_{\{d_{i,j}\}}\; \sum_c \log P_c$$
 
-其中 $J_c$ 是列 $c$ 的过载风险（位权加权 hinge 惩罚），$S_c$ 是位权加权等效开启数（稀疏性项）。
+其中 $P_c$ 是列 $c$ 在全1输入下的解析正确概率，由 FeFET 器件物理统计直接计算（无需 Monte Carlo）。
 
 ---
 
@@ -36,13 +36,12 @@ $$\min_{\{d_{i,j}\}}\; \sum_c J_c + \eta \sum_c S_c$$
 ```
 VADM/
 ├── run_inno2.py                # 全流程主入口（Phase 1–4）
-├── plot_inno2.py               # 论文配图生成（Figure 1, Figure 2）
-├── visualize_weight_bitplanes.py  # 权重 bit-plane 可视化工具
+├── plot_inno2.py               # 论文配图生成
 ├── README.md
 │
 ├── src/                        # 库模块（由入口脚本通过 sys.path 导入）
 │   ├── config_inno2.py         # 所有参数配置（唯一需要修改的文件）
-│   ├── FeFET_model.py          # FeFET 物理器件变异模型（1F1R，支持 1-bit/2-bit/mixed）
+│   ├── FeFET_model.py          # FeFET 物理器件变异模型（1F1R，支持 1-bit/2-bit）
 │   │
 │   │   ── Phase 1：校准 ──
 │   ├── analytical_cal.py       # 快速解析校准（LUT 积分 + 高斯近似，推荐）
@@ -54,10 +53,12 @@ VADM/
 │   ├── decompose.py            # SDR 分解：LUT 构建、conventional、min-neq
 │   ├── column_stats.py         # 列统计：n^{1b}、n^{2b,eq}、J_c、S_c、目标函数
 │   ├── baseline_mapping.py     # 基线 mapping（conventional_map、minneq_map）
-│   ├── mapping_optimizer.py    # 提出的逐列 SDR 优化器（Algorithm 1）
+│   ├── mapping_optimizer.py    # 代理目标优化器：min Σ(J_c + η·S_c)
+│   ├── col_log_prob.py         # 解析列概率核心函数（p_err 表、log P_c 计算）
+│   ├── accuracy_optimizer.py   # 精度直接优化器：max Σ log P_c  ← 主算法
 │   │
 │   │   ── Phase 4：精度评估 ──
-│   └── cim_accuracy.py         # CIM bit-serial MAC 精度仿真（量化整数模型：exact match rate、PE 错误率、余弦/L2）
+│   └── cim_accuracy.py         # CIM bit-serial MAC 精度仿真（量化整数模型）
 │
 ├── Results/                    # 中间数值结果（.npz，自动生成）
 └── Figures/                    # 图片输出（plot_inno2.py 生成）
@@ -74,7 +75,14 @@ cd VADM
 python run_inno2.py
 ```
 
-默认使用**快速解析校准**（`FAST_MODE=True`），Phase 1 在数秒内完成。整个流程依次执行 Phase 1–4，在一个随机 $64\times64$ 权重块上比较 Conventional、Min-neq SDR 与 Proposed mapping 的列过载风险，并评估 CIM MAC 精度。
+默认使用**快速解析校准**（`FAST_MODE=True`），Phase 1 在数秒内完成。整个流程依次执行 Phase 1–4，在一个随机 $64\times64$ 权重块上比较四种方法：
+
+| 方法 | 模块 | 优化目标 |
+|:----:|:----:|:--------:|
+| Conventional | `baseline_mapping.py` | 无优化（标准二进制分解） |
+| Min-neq SDR | `baseline_mapping.py` | 最小化等效活跃数 |
+| Proposed（代理） | `mapping_optimizer.py` | $\min \sum_c (J_c + \eta S_c)$ |
+| **Accuracy-Direct** | **`accuracy_optimizer.py`** | $\max \sum_c \log P_c$ |
 
 ### 4.2 命令行选项
 
@@ -92,29 +100,15 @@ python run_inno2.py --skip-mc
 python plot_inno2.py
 ```
 
-需先运行 `run_inno2.py` 生成 `Results/` 中的数据文件。输出：
+需先运行 `run_inno2.py` 生成 `Results/` 中的数据文件。
 
-- `Results/fig1_calibration.pdf/.png` — 器件电荷分布 & 误判概率曲线
-- `Results/fig2_mapping.pdf/.png` — PE 占用率 & 列风险 $J_c$ 对比
-
-### 4.4 可视化 bit-plane 分配
+### 4.4 单独测试精度直接优化器
 
 ```bash
-python visualize_weight_bitplanes.py                        # 默认 conventional
-python visualize_weight_bitplanes.py --method minneq
-python visualize_weight_bitplanes.py --method proposed --seed 2026
-python visualize_weight_bitplanes.py --weight-npy path/to/W.npy
+python src/accuracy_optimizer.py
 ```
 
-输出保存至 `Results/bitplane_viz_<method>/`。
-
-### 4.5 单独运行各模块
-
-```bash
-python src/analytical_cal.py        # Phase 1 解析校准（自测）
-python src/decompose.py             # SDR 分解自测
-python src/mapping_optimizer.py     # 在随机权重块上对比三种 mapping
-```
+在随机权重块上运行 5 轮，打印每轮 $\sum_c \log P_c$ 的变化（应单调递增）。
 
 ---
 
@@ -137,14 +131,6 @@ python src/mapping_optimizer.py     # 在随机权重块上对比三种 mapping
 | `EPSILON` | `0.01` | 可靠性阈值 $\varepsilon$：$p_\text{err} \leq \varepsilon$ 定义 $N_\text{th}$ |
 | `VTH_SIGMA_SCALE` | `1.0` | $V_\text{th}$ 变异幅度缩放（1.0 = 器件标称值） |
 | `N_MC` | `5000` | MC 模式每配置仿真次数（仅 `FAST_MODE=False`） |
-| `N_KAPPA_SAMPLES` | `500` | MC kappa 拟合时随机采样的 $(n_1,n_2,n_3)$ 组合数 |
-
-### 优化参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `GAMMA` | `0.1` | （保留，原 worst-column 权衡系数） |
-| `ETA` | `0.1` | 稀疏性惩罚系数 $\eta$（目标函数中 $\eta\sum_c S_c$ 项） |
 
 ### FeFET 器件参数（通常无需修改）
 
@@ -175,100 +161,129 @@ $$w = \sum_{m=0}^{K_B-1} \lambda_B[m]\, d^B_m \;+\; \sum_{t=0}^{K_Q-1} \lambda_Q
 $$B^+_m = \max(d^B_m, 0),\quad B^-_m = \max(-d^B_m, 0)$$
 $$Q^+_t = \max(d^Q_t, 0),\quad Q^-_t = \max(-d^Q_t, 0)$$
 
-对于给定的 $w$，满足上述分解的所有合法候选通过 SDR LUT（`build_sdr_lut`）预枚举。
+### 6.2 精度直接优化器（主算法）
 
-### 6.2 列统计量
+#### 核心目标
 
-**1-bit PE 列活跃数**（正负平面合并）：
+在**全1输入**（最大负载场景）下，每列 $c$、每个 bit-plane $b$、每侧（$+/-$）的模拟累加和服从高斯分布：
 
-$$n^{(1b)}_{m,c} = \sum_i \left|d^B_m[i,c]\right|$$
+$$S^\text{phys} \sim \mathcal{N}(\mu_S,\, \sigma^2_S)$$
 
-**2-bit PE 等效活跃数**（$\varphi$ 函数将高 cell value 折算为等效噪声贡献）：
+其中 $\mu_S$、$\sigma^2_S$ 由该列的 cell 状态组成（通过 FeFET 单器件统计量求和）直接确定：
 
-$$n^{(2b,\text{eq})}_{t,c} = \sum_i \varphi\!\left(\left|d^Q_t[i,c]\right|\right), \quad \varphi(v) = \begin{cases} 0 & v=0 \\ 1 & v=1 \\ \kappa_2 & v=2 \\ \kappa_3 & v=3 \end{cases}$$
+**1-bit 平面**，列 $c$ 有 $n_\text{on}$ 个 ON 态 cell：
+$$\mu_S = n_\text{on}\cdot\mu_\text{on} + (M-n_\text{on})\cdot\mu_\text{off}, \quad \sigma^2_S = n_\text{on}\cdot\sigma^2_\text{on} + (M-n_\text{on})\cdot\sigma^2_\text{off}$$
 
-其中 $\kappa_2,\kappa_3$ 由 Phase 1 校准确定（$\kappa_s = \sigma^2_{\text{cv}=s} / \sigma^2_{\text{cv}=1}$，即各 cell value 的电荷方差比）。
+**2-bit 平面**，列 $c$ 各状态数量为 $(n_0, n_1, n_2, n_3)$：
+$$\mu_S = \sum_{s=0}^{3} n_s\cdot\mu_s, \quad \sigma^2_S = \sum_{s=0}^{3} n_s\cdot\sigma^2_s, \quad S_\text{ideal} = n_1 + 2n_2 + 3n_3$$
 
-### 6.3 列风险与目标函数
+PE 量化误判概率（全1输入下，决策边界为整数 $\pm 0.5$）：
 
-**列过载风险**（$\alpha_m = \lambda_B[m]^2$，$\beta_t = \lambda_Q[t]^2$，高位平面被位权放大惩罚）：
+$$p_\text{err} = \frac{1}{2}\,\mathrm{erfc}\!\left(\frac{S_\text{ideal}+0.5-\mu_S}{\sqrt{2}\,\sigma_S}\right) + \frac{1}{2}\,\mathrm{erfc}\!\left(\frac{\mu_S - S_\text{ideal}+0.5}{\sqrt{2}\,\sigma_S}\right)$$
 
-$$J_c = \sum_m \alpha_m \left[n^{(1b)}_{m,c} - N^{(1b)}_\text{th}\right]_+ + \sum_t \beta_t \left[n^{(2b,\text{eq})}_{t,c} - N^{(2b)}_\text{th}\right]_+$$
+**列级对数概率**（对所有 bit-plane 和正负两侧求和）：
 
-**列稀疏性项**：
+$$\log P_c = \sum_{m=0}^{K_B-1}\left[\log(1-p^+_{m,c}) + \log(1-p^-_{m,c})\right] + \sum_{t=0}^{K_Q-1}\left[\log(1-p^+_{t,c}) + \log(1-p^-_{t,c})\right]$$
 
-$$S_c = \sum_m \alpha_m\, n^{(1b)}_{m,c} + \sum_t \beta_t\, n^{(2b,\text{eq})}_{t,c}$$
+利用**列独立性**（各列电荷积分互不影响），全局优化目标分解为：
 
-**全局优化目标**：
+$$\max_{\{d_{i,j}\}}\; \sum_c \log P_c \;\;\Longleftrightarrow\;\; \max_c \log P_c \text{（逐列独立最大化）}$$
 
-$$\min_{\{d_{i,j}\}}\; \sum_c J_c + \eta \sum_c S_c$$
+#### 状态追踪（增量更新）
 
-### 6.4 Phase 1 校准——确定 $N_\text{th}$ 与 $\kappa$
+维护四个计数数组：
+
+| 数组 | 形状 | 含义 |
+|:----:|:----:|:----:|
+| `n_on_p[m, c]` | $[K_B, N]$ | 1-bit 平面 $m$ 列 $c$ 的 $B^+$ ON 态数量 |
+| `n_on_m[m, c]` | $[K_B, N]$ | 1-bit 平面 $m$ 列 $c$ 的 $B^-$ ON 态数量 |
+| `n_state_p[t, c, s]` | $[K_Q, N, 4]$ | 2-bit 平面 $t$ 列 $c$ 中 $Q^+$ 状态 $s$ 的数量 |
+| `n_state_m[t, c, s]` | $[K_Q, N, 4]$ | 2-bit 平面 $t$ 列 $c$ 中 $Q^-$ 状态 $s$ 的数量 |
+
+当元素 $(i,c)$ 的 SDR 系数从旧候选切换到新候选时，仅需 $O(K_B + K_Q)$ 的增量更新，无需重扫整列。
+
+#### 算法流程
+
+```
+预计算: FeFET 器件统计量 (μ_s, σ²_s)  ← compute_device_stats()
+预计算: 1-bit p_err 查找表 [M+1]       ← build_p_err_table_1bit()
+
+初始化: mapping ← conventional 二进制分解
+初始化: 计数数组 n_on_p/m, n_state_p/m  ← _init_count_arrays()
+初始化: log_P[c] for all c
+
+repeat:
+    row_order = shuffle(0..M-1)
+    improved = False
+
+    for i in row_order:
+        for c in range(N):
+            for cand in lut[W[i,c]]:
+                Δ计数 = O(1) 增量（仅 1-bit 加减、2-bit 直方图修改）
+                try_log_P_c = col_log_prob(...)   ← O(K_B + K_Q)
+                if try_log_P_c > log_P[c] + ε:
+                    记录最优候选
+
+            if 找到更优候选:
+                提交更新（D_B, D_Q, 计数数组, log_P[c]）
+                improved = True
+
+until not improved
+```
+
+#### 与代理目标优化器的本质区别
+
+| 对比项 | 代理目标（旧） | 精度直接（新） |
+|:------:|:-------------:|:-------------:|
+| 优化目标 | $\min \sum_c (J_c + \eta S_c)$ | $\max \sum_c \log P_c$ |
+| 物理含义 | 启发式过载惩罚 + 稀疏性 | 解析量化正确概率 |
+| 参数敏感性 | 需调 $\eta$、overload/sparsity mode | 只需 FeFET 噪声模型 |
+| 理论保证 | 代理与真实目标相关性弱 | 单调优化，理论等价于 CIM 精度 |
+| 系统偏差捕获 | 仅通过 $N_\text{th}$ 间接近似 | 直接计算包含系统偏差的完整分布 |
+
+### 6.3 Phase 1 校准——确定器件统计量
 
 **快速模式**（`FAST_MODE=True`，默认）：
 
-基于 1F1R LUT 数值积分（每状态 400 点 Gauss 权重）直接计算单器件电荷统计量 $(\mu_Q, \sigma^2_Q)$，再利用列求和为正态分布（CLT，$M=64$ 时精度极好）解析计算误判概率：
+基于 1F1R LUT 数值积分（每状态 400 点高斯权重）直接计算单器件电荷统计量 $(\mu_Q, \sigma^2_Q)$，再利用列求和为正态分布（CLT，$M=64$ 时精度极好）解析计算：
 
 $$p_\text{err}(n) = \frac{1}{2}\,\mathrm{erfc}\!\left(\frac{\Delta\mu}{2\sqrt{2}\,\sigma_n}\right) + \frac{1}{2}\,\mathrm{erfc}\!\left(\frac{\Delta\mu}{2\sqrt{2}\,\sigma_{n+1}}\right)$$
 
-$N_\text{th}$ 定义为满足 $p_\text{err}(n) \leq \varepsilon$ 的最大 $n$。$\kappa$ 直接由电荷方差比给出，无需任何 Monte Carlo 采样，全程数秒。
+$N_\text{th}$ 定义为满足 $p_\text{err}(n) \leq \varepsilon$ 的最大 $n$。$\kappa$ 直接由电荷方差比给出，全程无 Monte Carlo，数秒完成。
 
 **MC 模式**（`FAST_MODE=False`，用于验证）：
-
-逐步执行 Phase 1.1（列 MC 仿真）→ 1.2（误判概率曲线）→ 1.3（kappa 拟合），适合精确尾概率估计与交叉验证。
 
 | 对比项 | 快速模式 | MC 模式 |
 |:------:|:--------:|:-------:|
 | Phase 1 耗时 | **数秒** | 数小时（~47905 combo） |
 | 内存占用 | **< 1 MB** | ~ 960 MB |
-| 精度 | 高斯近似（$M=64$ 时极好） | 精确尾概率 |
-| 多进程 | 不需要 | 最多 8 核 |
-
-### 6.5 Algorithm 1 — 逐列贪婪坐标下降
-
-1. 以 **Min-neq SDR** 初始化：对每个元素独立选择等效活跃数最小的候选。
-2. 计算初始列负载 $n^{(1b)}$、$n^{(2b,\text{eq})}$ 及目标函数值。
-3. 重复至收敛（`max_iter` 轮）：
-   - 随机打乱行序 $i$；
-   - 对每个 $(i,\, c)$，枚举 LUT 中 $W[i,c]$ 的所有合法 SDR 候选；
-   - 对每个候选，计算列 $c$ 的新目标值 $J_c + \eta S_c$（仅列 $c$ 受影响，$O(1)$ 增量更新）；
-   - 若存在严格更优候选则提交更新，否则保留当前分配。
-4. 目标函数不再下降时提前终止。
+| 精度 | 高斯近似（$M=64$ 极好） | 精确尾概率 |
 
 ---
 
 ## 7. Phase 4 — CIM MAC 精度评估（量化整数模型）
 
-**固定芯片模型**：$V_\text{th}$ 变异在权重矩阵级别采样一次，所有测试向量复用同一套器件特性，模拟真实芯片行为。
+**固定芯片模型**：$V_\text{th}$ 变异在权重矩阵级别采样一次，所有测试向量复用同一套器件特性。
 
-**Bit-serial 输入**：INT8 输入向量 $x$ 按两补码逐位分解（bit 0–6 权重为 $2^k$，bit 7 权重为 $-128$）。
+**三步 PE 计算模型**：
 
-**三步 PE 计算模型**：每个 PE（一列、一个 bit-plane）依次执行：
+1. **模拟积分**：$S^\text{phys}[j] = \sum_i x^\text{bit}_k[i]\cdot Q^\text{eff}_\text{cell}[i,j]$
 
-1. **模拟积分**：列电荷加和（含 $V_\text{th}$ 变异）
-
-$$S^\text{phys}[j] = \sum_i x^\text{bit}_k[i]\cdot Q^\text{eff}_\text{cell}[i,j] \quad \text{（连续浮点）}$$
-
-2. **量化读出**（ADC / Sense-Amp）：
-
-$$S^\text{quant}[j] = \operatorname{clip}\!\left(\operatorname{round}\!\left(S^\text{phys}[j]\right),\; 0,\; C\right)$$
-
-其中 1-bit 平面 $C = M$，2-bit 平面 $C = 3M$。若 $S^\text{quant}[j] \neq S^\text{ideal}[j]$（理想整数值），记为一次 **PE 量化错误事件**。
+2. **量化读出**（ADC / Sense-Amp）：$S^\text{quant}[j] = \operatorname{clip}(\operatorname{round}(S^\text{phys}[j]),\; 0,\; C)$
+   — 若 $S^\text{quant}[j] \neq S^\text{ideal}[j]$，记为一次 **PE 量化错误**
 
 3. **位权加权累积**：$y_\text{CIM}[j] \mathrel{+}= w_k \cdot \sum_m \lambda_B[m]\,(S^\text{quant}_{+,m} - S^\text{quant}_{-,m}) + \cdots$
 
-**"算对了"的定义**：$\operatorname{round}(y_\text{CIM}[j]) = y_\text{ref}[j]$，即 CIM 输出与精确整数 MAC 完全一致。
-
-**与 $N_\text{th}$ 的关联**：PE 量化错误直接对应 $J_c$ 优化器所针对的列过载事件——列活跃数 $n < N_\text{th}$ 时量化错误概率 $< \varepsilon$；超过 $N_\text{th}$ 则错误率上升，进而导致 MAC exact match rate 下降。
-
-**精度指标**（对 $N_\text{vec}=1000$ 个随机 INT8 向量统计）：
+**精度评估**（对 1000 个随机 INT8 向量统计，三方对比）：
 
 | 指标 | 说明 |
 |------|------|
-| **MAC exact match rate**（主要指标）| $\operatorname{round}(y_\text{CIM}[j]) = y_\text{ref}[j]$ 的比例 |
-| 余弦相似度均值/标准差 | $\cos(y_\text{CIM},\, y_\text{ref})$ |
-| 相对 L2 误差均值/标准差 | $\|y_\text{CIM} - y_\text{ref}\|_2 / \|y_\text{ref}\|_2$ |
-| **Per-plane PE 错误率** | 各 bit-plane（p/m 侧合并）的量化错误次数占比，直接验证 $N_\text{th}$ 边界 |
+| **MAC exact match rate** | $\operatorname{round}(y_\text{CIM}[j]) = y_\text{ref}[j]$ 的列比例 |
+| 余弦相似度 | $\cos(y_\text{CIM},\, y_\text{ref})$ 均值/标准差 |
+| 相对 L2 误差 | $\|y_\text{CIM} - y_\text{ref}\|_2 / \|y_\text{ref}\|_2$ 均值/标准差 |
+| Per-plane PE 错误率 | 各 bit-plane 量化错误次数占比 |
+
+Phase 4 输出三路对比：**Conventional vs Surrogate-proposed vs Accuracy-direct**。
 
 ---
 
@@ -276,16 +291,15 @@ $$S^\text{quant}[j] = \operatorname{clip}\!\left(\operatorname{round}\!\left(S^\
 
 | 文件 | 内容 | 生成来源 |
 |------|------|----------|
-| `calibration_params.npz` | $N^{(1b)}_\text{th}$，$N^{(2b)}_\text{th}$，$\kappa_2$，$\kappa_3$ | Phase 1（两种模式均生成） |
+| `calibration_params.npz` | $N^{(1b)}_\text{th}$，$N^{(2b)}_\text{th}$，$\kappa_2$，$\kappa_3$ | Phase 1 |
 | `kappa_final.npz` | 同上 + $p_\text{err}$ 曲线数组 | Phase 1 |
 | `error_prob_1bit.npz` | $n$，$p^{(1b)}_\text{err}(n)$ | Phase 1 |
 | `error_prob_2bit.npz` | $n_\text{eq}$，$p^{(2b)}_\text{err}(n_\text{eq})$ | Phase 1 |
-| `result_conventional.npz` | Conventional mapping 的 $J_c$、$S_c$ 等统计量 | Phase 2 |
+| `result_conventional.npz` | Conventional mapping 统计量 | Phase 2 |
 | `result_minneq.npz` | Min-neq SDR mapping 统计量 | Phase 2 |
-| `result_proposed.npz` | Proposed mapping 统计量 | Phase 3 |
-| `cim_accuracy.npz` | MAC exact match rate、余弦相似度、相对 L2 误差、per-plane PE 错误率（baseline vs proposed） | Phase 4 |
-| `col_mc_1bit.npz` | 1-bit MC 原始列分布 $Y[n_\text{on}, N_\text{mc}]$ | Phase 1.1（仅 MC 模式） |
-| `col_mc_2bit.npz` | 2-bit MC 原始列分布 $Y[K_\text{combo}, N_\text{mc}]$ | Phase 1.1（仅 MC 模式） |
+| `result_proposed.npz` | 代理目标 mapping 统计量 | Phase 3 |
+| `result_accuracy_direct.npz` | **精度直接 mapping 统计量** | Phase 3b |
+| `cim_accuracy.npz` | 三路精度对比（exact match、余弦、L2、PE 错误率） | Phase 4 |
 
 ---
 
@@ -293,7 +307,7 @@ $$S^\text{quant}[j] = \operatorname{clip}\!\left(\operatorname{round}\!\left(S^\
 
 ```
 numpy
-scipy        # erfc, brentq（Phase 1 校准）
+scipy        # erfc, brentq（Phase 1 校准 & 精度直接优化器）
 matplotlib   # 图表生成（plot_inno2.py）
 torch        # FeFET 变异采样（Phase 4，CPU 即可）
 ```
