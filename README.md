@@ -53,9 +53,11 @@ VADM/
 │   ├── decompose.py            # SDR 分解：LUT 构建、conventional、min-neq
 │   ├── column_stats.py         # 列统计：n^{1b}、n^{2b,eq}、J_c、S_c、目标函数
 │   ├── baseline_mapping.py     # 基线 mapping（conventional_map、minneq_map）
-│   ├── mapping_optimizer.py    # 代理目标优化器：min Σ(J_c + η·S_c)
+│   ├── mapping_optimizer.py    # 代理目标优化器（保留，不在主对比链路）
 │   ├── col_log_prob.py         # 解析列概率核心函数（p_err 表、log P_c 计算）
-│   ├── accuracy_optimizer.py   # 精度直接优化器：max Σ log P_c  ← 主算法
+│   ├── accuracy_optimizer.py   # Proposed1：max Σ log P_c
+│   ├── mac_accuracy_optimizer.py    # Proposed2：all-ones E2E 目标
+│   ├── mac_accuracy_optimizer_p3.py # Proposed3：CRN 对齐 E2E 目标
 │   │
 │   │   ── Phase 4：精度评估 ──
 │   └── cim_accuracy.py         # CIM bit-serial MAC 精度仿真（量化整数模型）
@@ -75,14 +77,15 @@ cd VADM
 python run_inno2.py
 ```
 
-默认使用**快速解析校准**（`FAST_MODE=True`），Phase 1 在数秒内完成。整个流程依次执行 Phase 1–4，在一个随机 $64\times64$ 权重块上比较四种方法：
+默认使用**快速解析校准**（`FAST_MODE=True`），Phase 1 在数秒内完成。整个流程依次执行 Phase 1–4，在一个随机 $64\times64$ 权重块上比较五种方法：
 
 | 方法 | 模块 | 优化目标 |
 |:----:|:----:|:--------:|
 | Conventional | `baseline_mapping.py` | 无优化（标准二进制分解） |
 | Min-neq SDR | `baseline_mapping.py` | 最小化等效活跃数 |
-| Proposed（代理） | `mapping_optimizer.py` | $\min \sum_c (J_c + \eta S_c)$ |
-| **Accuracy-Direct** | **`accuracy_optimizer.py`** | $\max \sum_c \log P_c$ |
+| Proposed1 | `accuracy_optimizer.py` | $\max \sum_c \log P_c$（all-ones bit-plane objective） |
+| Proposed2 | `mac_accuracy_optimizer.py` | all-ones INT8 end-to-end exact-match objective |
+| Proposed3 | `mac_accuracy_optimizer_p3.py` | random-INT8 CRN-aligned end-to-end exact-match objective |
 
 ### 4.2 命令行选项
 
@@ -283,7 +286,7 @@ $N_\text{th}$ 定义为满足 $p_\text{err}(n) \leq \varepsilon$ 的最大 $n$�
 | 相对 L2 误差 | $\|y_\text{CIM} - y_\text{ref}\|_2 / \|y_\text{ref}\|_2$ 均值/标准差 |
 | Per-plane PE 错误率 | 各 bit-plane 量化错误次数占比 |
 
-Phase 4 输出三路对比：**Conventional vs Surrogate-proposed vs Accuracy-direct**。
+Phase 4 输出四路对比：**Conventional vs Proposed1 vs Proposed2 vs Proposed3**。
 
 ---
 
@@ -297,9 +300,10 @@ Phase 4 输出三路对比：**Conventional vs Surrogate-proposed vs Accuracy-di
 | `error_prob_2bit.npz` | $n_\text{eq}$，$p^{(2b)}_\text{err}(n_\text{eq})$ | Phase 1 |
 | `result_conventional.npz` | Conventional mapping 统计量 | Phase 2 |
 | `result_minneq.npz` | Min-neq SDR mapping 统计量 | Phase 2 |
-| `result_proposed.npz` | 代理目标 mapping 统计量 | Phase 3 |
-| `result_accuracy_direct.npz` | **精度直接 mapping 统计量** | Phase 3b |
-| `cim_accuracy.npz` | 三路精度对比（exact match、余弦、L2、PE 错误率） | Phase 4 |
+| `result_proposed1.npz` | Proposed1 mapping 统计量 | Phase 3 |
+| `result_proposed2.npz` | Proposed2 mapping 统计量 | Phase 3b |
+| `result_proposed3.npz` | Proposed3 mapping 统计量 | Phase 3c |
+| `cim_accuracy.npz` | 四路精度对比（exact match、余弦、L2、PE 错误率） | Phase 4 |
 
 ---
 
