@@ -46,7 +46,12 @@ assert KB + 2 * KQ == 7, f"Constraint violated: K_B + 2*K_Q = {KB + 2*KQ}, expec
 W_MAX = 127      # |w_{i,j}| <= W_MAX; a+/a- in [0, W_MAX]
 
 # Column size (number of rows in one CIM array)
-COLUMN_SIZE = 64   # M in the paper
+COLUMN_SIZE = 512   # M in the paper — physical row count; governs noise threshold N_th
+
+# Number of independent columns (weight neurons) in the test weight matrix
+# N is purely for statistical averaging — more columns = more stable metrics, longer runtime
+# COLUMN_SIZE (M) and N_COLUMNS (N) are now fully independent
+N_COLUMNS = 32     # N in the paper — number of columns (repeated experiments)
 
 # ------------------------------------------------------------------------------
 # Calibration mode

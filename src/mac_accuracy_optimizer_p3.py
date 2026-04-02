@@ -304,7 +304,7 @@ if __name__ == '__main__':
 
     rng = np.random.default_rng(2027)
     W = rng.integers(-cfg.W_MAX, cfg.W_MAX + 1,
-                     size=(cfg.COLUMN_SIZE, cfg.COLUMN_SIZE))
+                     size=(cfg.COLUMN_SIZE, cfg.N_COLUMNS))
 
     try:
         cal = load_calibration()

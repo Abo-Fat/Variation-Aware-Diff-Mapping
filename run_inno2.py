@@ -170,7 +170,7 @@ def phase23(W=None):
     if W is None:
         rng = np.random.default_rng(2026)
         W   = rng.integers(-cfg.W_MAX, cfg.W_MAX + 1,
-                            size=(cfg.COLUMN_SIZE, cfg.COLUMN_SIZE))
+                            size=(cfg.COLUMN_SIZE, cfg.N_COLUMNS))
         print(f"\nUsing random {W.shape} weight block (seed=2026).")
 
     # Build LUT once, reuse across all methods

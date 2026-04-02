@@ -125,7 +125,8 @@ python src/accuracy_optimizer.py
 | `KB` | `3` | 每侧 1-bit PE 数量（MSB 侧） |
 | `KQ` | `2` | 每侧 2-bit PE 数量（LSB 侧） |
 | `W_MAX` | `127` | 量化权重范围 $[-127, 127]$ |
-| `COLUMN_SIZE` | `64` | CIM 阵列列长 $M$ |
+| `COLUMN_SIZE` | `512` | CIM 阵列物理行数 $M$，决定噪声阈值 $N_\text{th}$ |
+| `N_COLUMNS` | `32` | 测试权重矩阵的列数 $N$（独立重复实验次数），与 $M$ 解耦；减小可加速运行，不影响算法 |
 
 ### 校准参数
 
