@@ -308,6 +308,15 @@ $N_\text{th}$ 定义为满足 $p_\text{err}(n) \leq \varepsilon$ 的最大 $n$�
 | 余弦相似度 | $\cos(y_\text{CIM},\, y_\text{ref})$ 均值/标准差 |
 | 相对 L2 误差 | $\|y_\text{CIM} - y_\text{ref}\|_2 / \|y_\text{ref}\|_2$ 均值/标准差 |
 | Per-plane PE 错误率 | 各 bit-plane 量化错误次数占比 |
+| **Per-plane SNR [dB]** | 各 bit-plane 的平面级信噪比（见下） |
+
+**Per-plane SNR（PLSNR）**是对 Cosine Similarity / Exact Match 的重要补充。上述输出级指标被 MSB（大 $\lambda$）主导，2-bit LSB 平面即使误差率较高，绝对误差也小，难以从指标变化中区分不同 mapping 的优劣。PLSNR 对每个 PE 平面独立计算，$\lambda$ 在分子分母完全消掉：
+
+$$\mathrm{PLSNR}_p = 10\log_{10}\frac{\displaystyle\sum_{k,j,v}\bigl(w_k\cdot S^\text{ideal}_{p,\text{diff}}\bigr)^2}{\displaystyle\sum_{k,j,v}\bigl(w_k\cdot \Delta S_{p,\text{diff}}\bigr)^2}$$
+
+其中 $S^\text{ideal}_{p,\text{diff}} = S^+_{p,\text{ideal}} - S^-_{p,\text{ideal}}$，$\Delta S_{p,\text{diff}} = (S^+_{p,q} - S^-_{p,q}) - S^\text{ideal}_{p,\text{diff}}$，求和遍历所有 bit-cycle $k$、列 $j$、测试向量 $v$。
+
+该指标让各平面处于**同等地位**：1-bit MSB 平面几乎无误差，应显示 $+\infty$ dB；2-bit LSB 平面的误差在此指标下清晰可见，不同 mapping 方案的优劣差异可达数 dB。
 
 Phase 4 输出**三路对比**：**TC（二补码）vs Conventional（差分幅值码）vs Proposed1**。
 
@@ -325,7 +334,7 @@ Phase 4 输出**三路对比**：**TC（二补码）vs Conventional（差分幅�
 | `result_conventional.npz` | Conventional（差分幅值码）mapping 统计量 | Phase 2 |
 | `result_minneq.npz` | Min-neq SDR mapping 统计量 | Phase 2 |
 | `result_proposed1.npz` | Proposed1 mapping 统计量 | Phase 3 |
-| `cim_accuracy.npz` | 三路精度对比（TC/Conv/Proposed，exact match、余弦、L2、PE 错误率） | Phase 4 |
+| `cim_accuracy.npz` | 三路精度对比（TC/Conv/Proposed，exact match、余弦、L2、PE 错误率、per-plane SNR） | Phase 4 |
 
 ---
 

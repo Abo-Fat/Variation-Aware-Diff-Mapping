@@ -139,6 +139,12 @@ def _cim_output_quantised(x,
     entering the λ-weighted accumulation — modelling ADC / sense-amp readout.
     PE quantisation errors (S_quant ≠ S_ideal) are counted per plane.
 
+    Per-plane SNR accumulators (λ cancels in the ratio — each plane is assessed
+    independently of its bit significance):
+      sig_sq_1b[m] = Σ_{k,j} (w_k · (S_p_ideal − S_m_ideal)_j)²
+      err_sq_1b[m] = Σ_{k,j} (w_k · ((S_p_q − S_m_q) − (S_p_ideal − S_m_ideal))_j)²
+    Likewise for 2-bit planes.  Summing over N columns and 8 bit cycles per call.
+
     Parameters
     ----------
     x             : [M] int32
@@ -160,6 +166,10 @@ def _cim_output_quantised(x,
     pe_err_2b   : [KQ] int64
     pe_total_1b : [KB] int64    total measurements  (denominator for error rate)
     pe_total_2b : [KQ] int64
+    sig_sq_1b   : [KB] float64  signal power per 1-bit plane (for PLSNR)
+    err_sq_1b   : [KB] float64  error  power per 1-bit plane (for PLSNR)
+    sig_sq_2b   : [KQ] float64  signal power per 2-bit plane (for PLSNR)
+    err_sq_2b   : [KQ] float64  error  power per 2-bit plane (for PLSNR)
     """
     KB = len(q1b_p)
     KQ = len(q2b_p)
@@ -172,11 +182,16 @@ def _cim_output_quantised(x,
     pe_err_2b    = np.zeros(KQ, dtype=np.int64)
     pe_total_1b  = np.zeros(KB, dtype=np.int64)
     pe_total_2b  = np.zeros(KQ, dtype=np.int64)
+    sig_sq_1b    = np.zeros(KB, dtype=np.float64)
+    err_sq_1b    = np.zeros(KB, dtype=np.float64)
+    sig_sq_2b    = np.zeros(KQ, dtype=np.float64)
+    err_sq_2b    = np.zeros(KQ, dtype=np.float64)
 
     for k, w_k in enumerate(_BIT_WEIGHTS):
         # [M] float and int views of the k-th input bit plane
         input_f = ((x_uint >> k) & 1).astype(np.float64)
         input_i = ((x_uint >> k) & 1).astype(np.int64)
+        wk_f    = float(w_k)
 
         y_cycle = np.zeros(N, dtype=np.float64)
 
@@ -199,6 +214,12 @@ def _cim_output_quantised(x,
             pe_err_1b[m]   += int(np.sum(S_m_q != S_m_ideal))
             pe_total_1b[m] += 2 * N
 
+            # Per-plane SNR accumulators (λ is NOT included — cancels in ratio)
+            S_diff_ideal = (S_p_ideal - S_m_ideal).astype(np.float64)
+            S_diff_q     = (S_p_q     - S_m_q    ).astype(np.float64)
+            sig_sq_1b[m] += float(np.sum((wk_f * S_diff_ideal) ** 2))
+            err_sq_1b[m] += float(np.sum((wk_f * (S_diff_q - S_diff_ideal)) ** 2))
+
             # Step 3: weighted contribution
             y_cycle += lambda_B[m] * (S_p_q - S_m_q).astype(np.float64)
 
@@ -218,16 +239,43 @@ def _cim_output_quantised(x,
             pe_err_2b[t]   += int(np.sum(S_m_q != S_m_ideal))
             pe_total_2b[t] += 2 * N
 
+            # Per-plane SNR accumulators
+            S_diff_ideal = (S_p_ideal - S_m_ideal).astype(np.float64)
+            S_diff_q     = (S_p_q     - S_m_q    ).astype(np.float64)
+            sig_sq_2b[t] += float(np.sum((wk_f * S_diff_ideal) ** 2))
+            err_sq_2b[t] += float(np.sum((wk_f * (S_diff_q - S_diff_ideal)) ** 2))
+
             y_cycle += lambda_Q[t] * (S_p_q - S_m_q).astype(np.float64)
 
         y_CIM += w_k * y_cycle
 
-    return y_CIM, pe_err_1b, pe_err_2b, pe_total_1b, pe_total_2b
+    return (y_CIM, pe_err_1b, pe_err_2b, pe_total_1b, pe_total_2b,
+            sig_sq_1b, err_sq_1b, sig_sq_2b, err_sq_2b)
 
 
 # ---------------------------------------------------------------------------
 # Accuracy metrics
 # ---------------------------------------------------------------------------
+
+def _plane_snr_db(sig_sq, err_sq):
+    """
+    Compute per-plane SNR in dB from accumulated signal and error power.
+
+    PLSNR[p] = 10 · log10( sig_sq[p] / err_sq[p] )
+
+    λ is NOT included in either term — it cancels in the ratio, so each plane
+    is evaluated on equal footing regardless of its bit significance.
+
+    Returns +inf (as np.inf) when err_sq[p] == 0 (no errors observed).
+    Returns NaN  when sig_sq[p] == 0 (plane carries no signal power).
+    """
+    sig = np.asarray(sig_sq, dtype=np.float64)
+    err = np.asarray(err_sq, dtype=np.float64)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ratio = np.where(err > 0, sig / err, np.inf)
+        snr   = np.where(sig > 0, 10.0 * np.log10(ratio), np.nan)
+    return snr
+
 
 def _compute_metrics(y_cim, y_ref):
     """
@@ -299,6 +347,12 @@ def evaluate_accuracy(W, planes_tc, planes_conv, planes_proposed,
         'tc_pe_rate_1b',       'tc_pe_rate_2b'
         'conv_pe_rate_1b',     'conv_pe_rate_2b'
         'proposed_pe_rate_1b', 'proposed_pe_rate_2b'
+      Per-plane SNR [dB]  (λ-independent, equal weight to each PE plane):
+        'tc_plsnr_1b',         'tc_plsnr_2b'        lists of floats [KB] / [KQ]
+        'conv_plsnr_1b',       'conv_plsnr_2b'
+        'proposed_plsnr_1b',   'proposed_plsnr_2b'
+        np.inf  = no errors observed (perfect plane)
+        np.nan  = plane carries no signal (e.g. all-zero weights)
       Metadata:
         'lambda_B', 'lambda_Q', 'N_vec', 'sigma', 'clip_1b', 'clip_2b'
     """
@@ -365,6 +419,20 @@ def evaluate_accuracy(W, planes_tc, planes_conv, planes_proposed,
     pe_total_1b  = np.zeros(KB, dtype=np.int64)
     pe_total_2b  = np.zeros(KQ, dtype=np.int64)
 
+    # Per-plane SNR accumulators (signal power and error power, summed over all vectors)
+    plsnr_sig_1b_tc = np.zeros(KB, dtype=np.float64)
+    plsnr_err_1b_tc = np.zeros(KB, dtype=np.float64)
+    plsnr_sig_2b_tc = np.zeros(KQ, dtype=np.float64)
+    plsnr_err_2b_tc = np.zeros(KQ, dtype=np.float64)
+    plsnr_sig_1b_cv = np.zeros(KB, dtype=np.float64)
+    plsnr_err_1b_cv = np.zeros(KB, dtype=np.float64)
+    plsnr_sig_2b_cv = np.zeros(KQ, dtype=np.float64)
+    plsnr_err_2b_cv = np.zeros(KQ, dtype=np.float64)
+    plsnr_sig_1b_pr = np.zeros(KB, dtype=np.float64)
+    plsnr_err_1b_pr = np.zeros(KB, dtype=np.float64)
+    plsnr_sig_2b_pr = np.zeros(KQ, dtype=np.float64)
+    plsnr_err_2b_pr = np.zeros(KQ, dtype=np.float64)
+
     if verbose:
         print(f"  Evaluating {N_vec} random INT8 vectors "
               f"(clip_1b=[0,{clip_1b}], clip_2b=[0,{clip_2b}])...")
@@ -373,17 +441,20 @@ def evaluate_accuracy(W, planes_tc, planes_conv, planes_proposed,
         x     = X[i].astype(np.int32)
         y_ref = (W.T @ x.astype(np.int64)).astype(np.float64)   # exact [N]
 
-        y_tc, err1b_tc, err2b_tc, tot1, tot2 = _cim_output_quantised(
+        (y_tc, err1b_tc, err2b_tc, tot1, tot2,
+         ss1b_tc, se1b_tc, ss2b_tc, se2b_tc) = _cim_output_quantised(
             x, q1bp_tc, q1bm_tc, q2bp_tc, q2bm_tc,
             b_plus_tc, b_minus_tc, q_plus_tc, q_minus_tc,
             lambda_B, lambda_Q, clip_1b, clip_2b)
 
-        y_cv, err1b_cv, err2b_cv, _, _ = _cim_output_quantised(
+        (y_cv, err1b_cv, err2b_cv, _, _,
+         ss1b_cv, se1b_cv, ss2b_cv, se2b_cv) = _cim_output_quantised(
             x, q1bp_cv, q1bm_cv, q2bp_cv, q2bm_cv,
             b_plus_cv, b_minus_cv, q_plus_cv, q_minus_cv,
             lambda_B, lambda_Q, clip_1b, clip_2b)
 
-        y_pr, err1b_pr, err2b_pr, _, _ = _cim_output_quantised(
+        (y_pr, err1b_pr, err2b_pr, _, _,
+         ss1b_pr, se1b_pr, ss2b_pr, se2b_pr) = _cim_output_quantised(
             x, q1bp_pr, q1bm_pr, q2bp_pr, q2bm_pr,
             b_plus_pr, b_minus_pr, q_plus_pr, q_minus_pr,
             lambda_B, lambda_Q, clip_1b, clip_2b)
@@ -396,6 +467,13 @@ def evaluate_accuracy(W, planes_tc, planes_conv, planes_proposed,
         pe_err_2b_pr += err2b_pr
         pe_total_1b  += tot1
         pe_total_2b  += tot2
+
+        plsnr_sig_1b_tc += ss1b_tc;  plsnr_err_1b_tc += se1b_tc
+        plsnr_sig_2b_tc += ss2b_tc;  plsnr_err_2b_tc += se2b_tc
+        plsnr_sig_1b_cv += ss1b_cv;  plsnr_err_1b_cv += se1b_cv
+        plsnr_sig_2b_cv += ss2b_cv;  plsnr_err_2b_cv += se2b_cv
+        plsnr_sig_1b_pr += ss1b_pr;  plsnr_err_1b_pr += se1b_pr
+        plsnr_sig_2b_pr += ss2b_pr;  plsnr_err_2b_pr += se2b_pr
 
         c_tc, l_tc, e_tc = _compute_metrics(y_tc, y_ref)
         c_cv, l_cv, e_cv = _compute_metrics(y_cv, y_ref)
@@ -433,6 +511,13 @@ def evaluate_accuracy(W, planes_tc, planes_conv, planes_proposed,
         'tc_pe_rate_2b':           (pe_err_2b_tc / denom_2b).tolist(),
         'conv_pe_rate_2b':         (pe_err_2b_cv / denom_2b).tolist(),
         'proposed_pe_rate_2b':     (pe_err_2b_pr / denom_2b).tolist(),
+        # Per-plane SNR [dB]  (λ-independent — equal footing for all planes)
+        'tc_plsnr_1b':             _plane_snr_db(plsnr_sig_1b_tc, plsnr_err_1b_tc).tolist(),
+        'conv_plsnr_1b':           _plane_snr_db(plsnr_sig_1b_cv, plsnr_err_1b_cv).tolist(),
+        'proposed_plsnr_1b':       _plane_snr_db(plsnr_sig_1b_pr, plsnr_err_1b_pr).tolist(),
+        'tc_plsnr_2b':             _plane_snr_db(plsnr_sig_2b_tc, plsnr_err_2b_tc).tolist(),
+        'conv_plsnr_2b':           _plane_snr_db(plsnr_sig_2b_cv, plsnr_err_2b_cv).tolist(),
+        'proposed_plsnr_2b':       _plane_snr_db(plsnr_sig_2b_pr, plsnr_err_2b_pr).tolist(),
         # Metadata
         'lambda_B': lambda_B,
         'lambda_Q': lambda_Q,
@@ -487,6 +572,28 @@ def print_accuracy_comparison(result):
               f"{result['tc_pe_rate_2b'][t]:>10.4%} "
               f"{result['conv_pe_rate_2b'][t]:>10.4%} "
               f"{result['proposed_pe_rate_2b'][t]:>10.4%}")
+
+    def _fmt_snr(v):
+        """Format a single SNR value: inf → '  +inf dB', nan → '    n/a  '."""
+        if np.isinf(v) and v > 0:
+            return '   +inf dB'
+        if np.isnan(v):
+            return '    n/a   '
+        return f'{v:>9.2f} dB'
+
+    print(f"\n  Per-plane SNR  [dB]  (λ-independent — equal footing for all planes):")
+    print(f"  {'Plane':<28} {'lambda':>7}  {'TC':>12} {'Conv':>12} {'Proposed':>12}")
+    print(f"  {'-'*78}")
+    for m in range(len(lB)):
+        print(f"  {'1-bit plane '+str(m):<28} {lB[m]:>5d}  "
+              f"{_fmt_snr(result['tc_plsnr_1b'][m])} "
+              f"{_fmt_snr(result['conv_plsnr_1b'][m])} "
+              f"{_fmt_snr(result['proposed_plsnr_1b'][m])}")
+    for t in range(len(lQ)):
+        print(f"  {'2-bit plane '+str(t):<28} {lQ[t]:>5d}  "
+              f"{_fmt_snr(result['tc_plsnr_2b'][t])} "
+              f"{_fmt_snr(result['conv_plsnr_2b'][t])} "
+              f"{_fmt_snr(result['proposed_plsnr_2b'][t])}")
 
 
 # ---------------------------------------------------------------------------

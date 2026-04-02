@@ -11,7 +11,7 @@ import numpy as np
 # ------------------------------------------------------------------------------
 # FeFET device parameters  (must match config/config.py)
 # ------------------------------------------------------------------------------
-FEFET_SS           = 0.115          # Subthreshold swing [V/dec]
+FEFET_SS           = 0.115          # Subthreshold swing [V/dec] 0.115 or 0.200
 FEFET_I0           = 1e-9           # Drain current at Vth [A]
 FEFET_R_LIMIT      = 1e6            # Current-limiting resistor [Ohm]
 FEFET_VD           = 0.1            # Drain voltage [V]
@@ -20,6 +20,10 @@ FEFET_VTH_STATES   = [-0.96, -0.53, -0.023, 0.52]          # internal state inde
 FEFET_SIGMA_VTH    = [0.0546, 0.0505, 0.0619, 0.0614]       # matches FEFET_VTH_STATES index order
 
 # Staircase read (2-bit)
+# @ FEFET_SS= 0.2
+# FEFET_VG_STEPS_2BIT = [-0.2, 0.3, 0.8]   # [V]
+# FEFET_VG_READ_1BIT  = 0.3                 # [V]
+# @ FEFET_SS= 0.115
 FEFET_VG_STEPS_2BIT = [-0.5, 0.0, 0.5]   # [V]
 FEFET_VG_READ_1BIT  = 0.0                 # [V]
 FEFET_T_STEP        = 50e-9               # [s]
@@ -37,8 +41,8 @@ VTH_SIGMA_SCALE = 1.0
 # K_Q: number of 2-bit PEs per side (+/-)
 # ------------------------------------------------------------------------------
 # Available combinations: (7,0), (5,1), (3,2), (1,3)
-KB = 1     # number of 1-bit PEs (MSB side)
-KQ = 3     # number of 2-bit PEs (LSB side)
+KB = 3     # number of 1-bit PEs (MSB side)
+KQ = 2     # number of 2-bit PEs (LSB side)
 
 assert KB + 2 * KQ == 7, f"Constraint violated: K_B + 2*K_Q = {KB + 2*KQ}, expected 7"
 
@@ -46,7 +50,7 @@ assert KB + 2 * KQ == 7, f"Constraint violated: K_B + 2*K_Q = {KB + 2*KQ}, expec
 W_MAX = 127      # |w_{i,j}| <= W_MAX; a+/a- in [0, W_MAX]
 
 # Column size (number of rows in one CIM array)
-COLUMN_SIZE = 256   # M in the paper — physical row count; governs noise threshold N_th
+COLUMN_SIZE = 64   # M in the paper — physical row count; governs noise threshold N_th
 
 # Number of independent columns (weight neurons) in the test weight matrix
 # N is purely for statistical averaging — more columns = more stable metrics, longer runtime
