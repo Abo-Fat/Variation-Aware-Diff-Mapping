@@ -37,8 +37,8 @@ VTH_SIGMA_SCALE = 1.0
 # K_Q: number of 2-bit PEs per side (+/-)
 # ------------------------------------------------------------------------------
 # Available combinations: (7,0), (5,1), (3,2), (1,3)
-KB = 3     # number of 1-bit PEs (MSB side)
-KQ = 2     # number of 2-bit PEs (LSB side)
+KB = 1     # number of 1-bit PEs (MSB side)
+KQ = 3     # number of 2-bit PEs (LSB side)
 
 assert KB + 2 * KQ == 7, f"Constraint violated: K_B + 2*K_Q = {KB + 2*KQ}, expected 7"
 
@@ -46,7 +46,7 @@ assert KB + 2 * KQ == 7, f"Constraint violated: K_B + 2*K_Q = {KB + 2*KQ}, expec
 W_MAX = 127      # |w_{i,j}| <= W_MAX; a+/a- in [0, W_MAX]
 
 # Column size (number of rows in one CIM array)
-COLUMN_SIZE = 512   # M in the paper — physical row count; governs noise threshold N_th
+COLUMN_SIZE = 256   # M in the paper — physical row count; governs noise threshold N_th
 
 # Number of independent columns (weight neurons) in the test weight matrix
 # N is purely for statistical averaging — more columns = more stable metrics, longer runtime
@@ -114,3 +114,32 @@ SPARSITY_MODE = 'nth_normalized'
 #   'uniform'        -> unweighted hinge
 #   'nth_normalized' -> hinge on normalized overload (discards error weighting)
 OVERLOAD_MODE = 'weighted'
+
+# ------------------------------------------------------------------------------
+# Weight matrix generation
+# ------------------------------------------------------------------------------
+# Neural-network weights cluster around zero (approximately Gaussian).
+# Standard deviation: W_MAX / 3 so that ~99.7 % of samples fall within
+# [-W_MAX, W_MAX] before clipping.  Values are rounded to integers and
+# clipped, matching INT8 quantised weight statistics.
+W_SIGMA = W_MAX / 3.0   # ≈ 42 for W_MAX=127
+
+
+def generate_weight_matrix(rng, shape=None):
+    """Return an integer weight matrix with Gaussian statistics.
+
+    Parameters
+    ----------
+    rng   : numpy Generator  (e.g. np.random.default_rng(seed))
+    shape : tuple, optional  defaults to (COLUMN_SIZE, N_COLUMNS)
+
+    Returns
+    -------
+    W : ndarray [shape], dtype int32, values in [-W_MAX, W_MAX]
+    """
+    import numpy as _np
+    if shape is None:
+        shape = (COLUMN_SIZE, N_COLUMNS)
+    W = rng.normal(0.0, W_SIGMA, size=shape)
+    W = _np.clip(_np.round(W), -W_MAX, W_MAX).astype(_np.int32)
+    return W

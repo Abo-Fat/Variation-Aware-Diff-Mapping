@@ -77,7 +77,7 @@ cd VADM
 python run_inno2.py
 ```
 
-默认使用**快速解析校准**（`FAST_MODE=True`），Phase 1 在数秒内完成。整个流程依次执行 Phase 1–4，在一个随机 $64\times64$ 权重块上对比四种方法：
+默认使用**快速解析校准**（`FAST_MODE=True`），Phase 1 在数秒内完成。整个流程依次执行 Phase 1–4，在一个**高斯分布权重块**（$\sigma \approx W_\text{MAX}/3$，符合神经网络量化权重的实际分布）上对比四种方法：
 
 | 方法 | 模块 | 优化目标 |
 |:----:|:----:|:--------:|
@@ -118,6 +118,14 @@ python src/accuracy_optimizer.py
 
 ## 5. 配置参数（`src/config_inno2.py`）
 
+### 权重生成
+
+测试权重矩阵通过 `cfg.generate_weight_matrix(rng)` 统一生成，采用**截断高斯分布**：
+
+$$w \sim \mathcal{N}(0,\, \sigma_W^2), \quad \text{四舍五入后裁剪至} [-W_\text{MAX},\, W_\text{MAX}]$$
+
+这与真实神经网络 INT8 量化权重的分布一致（大量权重集中在 0 附近）。如需调整分布宽度，仅修改 `W_SIGMA` 即可，所有模块自动生效。
+
 ### 精度与阵列参数
 
 | 参数 | 默认值 | 说明 |
@@ -127,6 +135,7 @@ python src/accuracy_optimizer.py
 | `W_MAX` | `127` | 量化权重范围 $[-127, 127]$ |
 | `COLUMN_SIZE` | `512` | CIM 阵列物理行数 $M$，决定噪声阈值 $N_\text{th}$ |
 | `N_COLUMNS` | `32` | 测试权重矩阵的列数 $N$（独立重复实验次数），与 $M$ 解耦；减小可加速运行，不影响算法 |
+| `W_SIGMA` | `W_MAX/3 ≈ 42` | 权重生成的高斯标准差；约 99.7% 的样本在裁剪前已落入 $[-127, 127]$ |
 
 ### 校准参数
 

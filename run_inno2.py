@@ -169,9 +169,8 @@ def phase23(W=None):
 
     if W is None:
         rng = np.random.default_rng(2026)
-        W   = rng.integers(-cfg.W_MAX, cfg.W_MAX + 1,
-                            size=(cfg.COLUMN_SIZE, cfg.N_COLUMNS))
-        print(f"\nUsing random {W.shape} weight block (seed=2026).")
+        W   = cfg.generate_weight_matrix(rng)
+        print(f"\nUsing Gaussian weight block {W.shape} (seed=2026, σ≈{cfg.W_SIGMA:.0f}).")
 
     # Build LUT once, reuse across all methods
     print("\nBuilding SDR LUT...")
@@ -242,7 +241,7 @@ def phase4(W, res_tc, res_conv, res_p1):
 
     print("\n" + "=" * 60)
     print("[Phase 4] CIM MAC accuracy evaluation  (TC / Conv / Proposed)")
-    print(f"  N_vec=1000, vth_sigma_scale={cfg.VTH_SIGMA_SCALE:.1f}")
+    print(f"  N_vec=500, vth_sigma_scale={cfg.VTH_SIGMA_SCALE:.1f}")
 
     acc = evaluate_accuracy(
         W,
@@ -250,7 +249,7 @@ def phase4(W, res_tc, res_conv, res_p1):
         planes_conv     = res_conv['planes'],
         planes_proposed = res_p1['planes'],
         sigma           = cfg.VTH_SIGMA_SCALE,
-        N_vec           = 1000,
+        N_vec           = 500,
         seed            = 2026,
         device          = 'cpu',
         verbose         = True,

@@ -343,8 +343,7 @@ if __name__ == '__main__':
     from baseline_mapping import conventional_map, minneq_map, print_summary
 
     rng = np.random.default_rng(2026)
-    W   = rng.integers(-cfg.W_MAX, cfg.W_MAX + 1,
-                        size=(cfg.COLUMN_SIZE, cfg.N_COLUMNS))
+    W   = cfg.generate_weight_matrix(rng)
 
     try:
         cal = load_calibration()
